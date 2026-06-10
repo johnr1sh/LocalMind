@@ -1390,3 +1390,128 @@ body {
 .welcome-card-icon svg {
   color: var(--accent);
 }
+
+/* ---- device safety / system health ---- */
+.system-health {
+  width: 100%;
+  margin: 14px auto 18px;
+  padding: 14px;
+  text-align: left;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.18);
+}
+
+.system-health.compact {
+  margin: 0 0 18px;
+  padding: 12px;
+  box-shadow: none;
+}
+
+.system-health-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.system-health-head strong {
+  display: block;
+  color: var(--text-1);
+  font-size: 0.9rem;
+  line-height: 1.25;
+}
+
+.system-health-head p {
+  margin-top: 2px;
+  color: var(--text-2);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.system-health-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--success);
+  box-shadow: 0 0 0 4px rgba(34,197,94,0.14);
+}
+
+.system-health-warn .system-health-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 0 4px rgba(245,158,11,0.16);
+}
+
+.system-health-danger .system-health-dot {
+  background: var(--danger);
+  box-shadow: 0 0 0 4px rgba(239,68,68,0.16);
+}
+
+.system-health-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.system-health-grid div {
+  min-width: 0;
+  padding: 8px 10px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.system-health-grid span,
+.system-health-grid strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.system-health-grid span {
+  color: var(--text-3);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.system-health-grid strong {
+  color: var(--text-1);
+  font-size: 0.84rem;
+  margin-top: 1px;
+}
+
+.system-health-notes {
+  margin: 10px 0 0 18px;
+  color: var(--text-2);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.model-loading-inner {
+  max-width: 440px;
+}
+
+.progress-bar-wrap[data-indeterminate="true"] .progress-bar {
+  min-width: 36%;
+  animation: progressSlide 1.2s ease-in-out infinite;
+}
+
+@keyframes progressSlide {
+  0% { transform: translateX(-110%); }
+  50% { transform: translateX(80%); }
+  100% { transform: translateX(220%); }
+}
+
+#confirm-message {
+  white-space: pre-line;
+}
+
+@media (max-width: 520px) {
+  .system-health-grid { grid-template-columns: 1fr; }
+  .system-health { padding: 12px; }
+}
