@@ -214,6 +214,7 @@ async function runGeneration(convId) {
     try {
       await loadModel(modelId);
     } catch (err) {
+      UI.setProgress({ status: 'fallback' });
       UI.showErr(`Model load failed. Browser Helper mode is active. ${err.message}`, 9000);
       refreshModelBadge('fallback', modelId);
     }
@@ -232,11 +233,11 @@ async function runGeneration(convId) {
 
   const msgs = AI.withSystem(history, sys);
 
-  const opts = {
+  const opts = safeGenerationOptions(modelIdForGeneration(), {
     temperature: parseFloat(app.settings.temperature ?? 0.7),
     max_new_tokens: parseInt(app.settings.maxTokens ?? 512),
     top_p: parseFloat(app.settings.topP ?? 0.9),
-  };
+  });
 
   const tmpId = `stream_${Date.now()}`;
   const { el, push, done } = UI.streamingEl(tmpId);
@@ -250,6 +251,7 @@ async function runGeneration(convId) {
 
   try {
     const full = await AI.generate(msgs, opts, push, done);
+    if (AI.isFallback()) refreshModelBadge('fallback', modelIdForGeneration());
 
     const aiMsg = await DB.addMsg(convId, 'assistant', full);
     el.dataset.msgId = aiMsg.id;
@@ -261,6 +263,7 @@ async function runGeneration(convId) {
   } catch (err) {
     document.getElementById('typing-indicator').classList.add('hidden');
     el.remove();
+    if (AI.isLikelyMemoryError(err)) AI.resetModel();
     UI.showErr(`Generation failed: ${err.message}`);
     console.error(err);
   } finally {
@@ -302,6 +305,25 @@ async function clearChat() {
 }
 
 // ---- model loading ----
+
+function modelIdForGeneration() {
+  return AI.getModelId() || app.settings.model || AI.DEFAULT_MODEL;
+}
+
+function safeGenerationOptions(modelId, opts) {
+  const model = AI.MODELS[modelId] || AI.MODELS[AI.DEFAULT_MODEL];
+  const memoryGB = Number.isFinite(navigator.deviceMemory) ? navigator.deviceMemory : null;
+  let maxTokens = Number.isFinite(opts.max_new_tokens) ? opts.max_new_tokens : 512;
+
+  if (memoryGB !== null && memoryGB <= 4) maxTokens = Math.min(maxTokens, 256);
+  if (memoryGB !== null && memoryGB <= 6 && model.runtimeMB >= 1600) maxTokens = Math.min(maxTokens, 256);
+  if (model.runtimeMB >= 3000) maxTokens = Math.min(maxTokens, memoryGB !== null && memoryGB < 16 ? 256 : 512);
+
+  return {
+    ...opts,
+    max_new_tokens: Math.max(64, Math.min(1024, maxTokens)),
+  };
+}
 
 async function loadModel(id, { showPanel = true } = {}) {
   const health = await ensureModelSafeToLoad(id);
@@ -474,9 +496,6 @@ async function refreshSystemHealth(modelId = app.settings.model || AI.DEFAULT_MO
 }
 
 async function ensureModelSafeToLoad(modelId) {
-  const cached = await AI.isCached(modelId);
-  if (cached) return AI.systemHealth(modelId);
-
   const health = await refreshSystemHealth(modelId);
   if (!health.safe) {
     throw new Error(`Download blocked for device safety. ${health.issues.join(' ')}`);

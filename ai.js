@@ -184,13 +184,28 @@ function unique(list) {
   return [...new Set(list.filter(Boolean))];
 }
 
+function isMemoryAllocationError(err) {
+  const message = (err?.message || String(err || '')).toLowerCase();
+  return message.includes('array buffer allocation failed')
+    || message.includes('out of memory')
+    || message.includes('memory access out of bounds')
+    || message.includes('allocation failed');
+}
+
+function memoryRecoveryAdvice() {
+  return 'This usually means the browser could not reserve enough contiguous RAM. Close other tabs/apps, use SmolLM2 360M, lower Max Tokens to 256 or less, and retry. If it keeps happening, clear the model cache and avoid larger models on this device.';
+}
+
 function friendlyLoadError(err, attempts) {
   const tried = attempts.map(a => `${a.device}/${a.dtype}`).join(', ');
   const message = err?.message || String(err);
+  const advice = isMemoryAllocationError(err)
+    ? memoryRecoveryAdvice()
+    : 'Check that you are online for the first download, have enough free browser storage, and are using a recent Chrome/Edge browser. You can still use Browser Helper mode for diagnostics.';
   return new Error([
     `Could not finish loading the local AI model. Tried ${tried}.`,
     message,
-    'Check that you are online for the first download, have enough free browser storage, and are using a recent Chrome/Edge browser. You can still use Browser Helper mode for diagnostics.',
+    advice,
   ].join(' '));
 }
 
@@ -222,7 +237,9 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
     onProgress({ status: 'initiate', progress: 0, modelId, text: `Preparing ${cfg.name}…` });
 
     for (const device of devicesForBrowser()) {
-      const dtypes = device === 'wasm' ? unique(['q8', 'q4', cfg.dtype, ...(cfg.fallbacks || [])]) : unique([cfg.dtype, ...(cfg.fallbacks || [])]);
+      const dtypes = device === 'wasm'
+        ? unique([cfg.dtype, ...(cfg.fallbacks || []), 'q4', 'q4f16', 'q8'])
+        : unique([cfg.dtype, ...(cfg.fallbacks || [])]);
       for (const dtype of dtypes) {
         const attempt = { device, dtype };
         attempts.push(attempt);
@@ -294,11 +311,42 @@ export async function generate(msgs, settings = {}, onToken = () => {}, onDone =
       onDone(output + ' ▪');
       return output;
     }
+    if (isMemoryAllocationError(err)) {
+      lastError = err;
+      pipe = null;
+      loadedModel = null;
+      const answer = await generateMemoryFallback(msgs, settings, onToken, onDone, err);
+      return answer;
+    }
     throw err;
   }
 
   onDone(output);
   return output;
+}
+
+async function generateMemoryFallback(msgs, settings, onToken, onDone, err) {
+  fallbackMode = true;
+  const diag = await browserDiagnostics();
+  const answer = [
+    'The local model ran out of browser memory while trying to respond, so I switched to Browser Helper mode instead of crashing.',
+    '',
+    memoryRecoveryAdvice(),
+    '',
+    'Current browser diagnostics:',
+    '',
+    diag,
+    '',
+    `Original error: ${err?.message || String(err)}`,
+  ].join('\n');
+
+  for (const chunk of answer.match(/.{1,18}(\s|$)/g) || [answer]) {
+    if (stopFlag) break;
+    onToken(chunk);
+    await new Promise(r => setTimeout(r, 8));
+  }
+  onDone(answer);
+  return answer;
 }
 
 async function generateFallback(msgs, settings, onToken, onDone) {
@@ -358,6 +406,15 @@ export function getModelId() { return loadedModel; }
 export function isLoading() { return loading; }
 export function getLoadingModelId() { return loadingModel; }
 export function getLastError() { return lastError; }
+export function resetModel() {
+  pipe = null;
+  loadedModel = null;
+  loading = false;
+  loadingModel = null;
+  loadingPromise = null;
+  fallbackMode = true;
+}
+export function isLikelyMemoryError(err) { return isMemoryAllocationError(err); }
 
 export async function isCached(modelId) {
   try {
