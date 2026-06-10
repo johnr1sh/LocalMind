@@ -289,7 +289,7 @@
             <span id="max-tokens-value" class="form-label-value">512</span>
           </label>
           <input type="range" id="max-tokens-input" class="form-range" min="64" max="2048" step="64" value="512" aria-describedby="max-tokens-hint" />
-          <p id="max-tokens-hint" class="form-hint">Maximum length of AI response.</p>
+          <p id="max-tokens-hint" class="form-hint">Maximum length of AI response. LocalMind may automatically cap this on low-memory devices to prevent array buffer allocation failures.</p>
         </div>
         <div class="form-group">
           <label for="top-p-input" class="form-label">

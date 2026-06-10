@@ -241,10 +241,11 @@ The export format is versioned (`"version": 1`) for forward compatibility.
 - Try a different network (some corporate proxies block HuggingFace)
 - The model caches after the first download — subsequent loads are instant
 
-**"Out of memory" error**
+**"Out of memory" or "Array buffer allocation failed" error**
 - Try a smaller model (SmolLM2 360M is the most memory-efficient)
-- Close other browser tabs to free RAM
-- On mobile, 4GB+ RAM is recommended for the 0.5B model
+- Close other browser tabs/apps to free RAM and then reload LocalMind
+- Reduce Max Tokens in Settings; LocalMind also auto-caps generation on low-memory devices
+- On mobile, 4GB+ RAM is recommended for SmolLM2 and 6GB+ for the 0.5B model
 
 **Responses are very slow**
 - WebGPU is not available in your browser — the app is using CPU (WASM)
