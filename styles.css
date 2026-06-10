@@ -500,6 +500,7 @@ body {
   animation: pulse 1.4s ease infinite;
 }
 .model-badge-dot.error { background: var(--danger); }
+.model-badge-dot.fallback { background: var(--warning); }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }

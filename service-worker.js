@@ -9,7 +9,7 @@
  * a much faster install and no quota issues.
  */
 
-const VER = 'v1.1.0';
+const VER = 'v1.2.0';
 const STATIC = `lm-static-${VER}`;
 const MODELS = `lm-models-${VER}`;
 const RUNTIME = `lm-rt-${VER}`;
@@ -24,9 +24,8 @@ const PRECACHE = [
   './db.js',
   './ui.js',
   './manifest.json',
-  './icons/icon-192.png',
-  './icons/icon-512.png',
   './icons/icon.svg',
+  './icons/icon-maskable.svg',
 ];
 
 self.addEventListener('install', e => {

@@ -383,7 +383,7 @@ export function confirmDlg(title, msg, okLabel = 'Delete') {
 
 // ---- progress bar ----
 
-export function setProgress({ status, progress, text, file, loaded, total }) {
+export function setProgress({ status, progress, text, file, loaded, total, device, dtype }) {
   const panel = document.getElementById('model-loading-panel');
   const bar = document.getElementById('progress-bar');
   const wrap = document.getElementById('progress-bar-wrap');
@@ -396,6 +396,11 @@ export function setProgress({ status, progress, text, file, loaded, total }) {
 
   if (status === 'ready') { panel.classList.add('hidden'); return; }
 
+  if (status === 'fallback') {
+    panel.classList.add('hidden');
+    return;
+  }
+
   panel.classList.remove('hidden');
 
   if (status === 'initiate') {
@@ -404,6 +409,16 @@ export function setProgress({ status, progress, text, file, loaded, total }) {
     bar.style.width = '0%';
     pct.textContent = '0%';
     txt.textContent = text || 'Starting…';
+    if (device || dtype) desc.textContent = `${device || 'browser'} / ${dtype || 'auto'}`;
+    return;
+  }
+
+  if (status === 'retry') {
+    title.textContent = 'Trying Another Runtime';
+    desc.textContent = text || 'The previous runtime failed. Trying a safer fallback…';
+    txt.textContent = `${device || 'Runtime'} ${dtype || ''}`.trim();
+    bar.style.width = '12%';
+    pct.textContent = '12%';
     return;
   }
 
@@ -415,13 +430,14 @@ export function setProgress({ status, progress, text, file, loaded, total }) {
     const fname = file ? file.split('/').pop() : 'Model files';
     const lMB = loaded ? (loaded / 1048576).toFixed(1) : '?';
     const tMB = total ? (total / 1048576).toFixed(1) : '?';
-    txt.textContent = `${fname} — ${lMB}MB / ${tMB}MB`;
+    txt.textContent = total ? `${fname} — ${lMB}MB / ${tMB}MB` : `${fname} — downloading…`;
     title.textContent = 'Downloading AI Model';
+    desc.textContent = device ? `Using ${device.toUpperCase()} (${dtype || 'auto'}). Keep this tab open for the first download.` : 'Keep this tab open for the first download.';
   }
 
   if (status === 'loading') {
     title.textContent = 'Loading into Memory';
-    txt.textContent = file ? `Loading ${file.split('/').pop()}…` : 'Loading…';
+    txt.textContent = file ? `Loading ${file.split('/').pop()}…` : (text || 'Loading…');
     bar.style.width = '90%';
     pct.textContent = '90%';
   }

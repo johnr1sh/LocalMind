@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="LocalMind">
+  <rect width="512" height="512" fill="#0f172a"/>
+  <circle cx="256" cy="256" r="150" fill="none" stroke="#10b981" stroke-width="30"/>
+  <path d="M168 256h176M256 168v176" stroke="#e5fff7" stroke-width="34" stroke-linecap="round"/>
+  <circle cx="256" cy="256" r="32" fill="#6366f1"/>
+</svg>

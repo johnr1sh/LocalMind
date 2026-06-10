@@ -12,12 +12,13 @@
   <title>LocalMind — Offline AI Chat</title>
 
   <link rel="manifest" href="manifest.json" />
-  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png" />
-  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
   <link rel="stylesheet" href="styles.css" />
 
   <!-- Preconnect for faster initial load -->
   <link rel="preconnect" href="https://cdn.jsdelivr.net" />
+  <link rel="preconnect" href="https://huggingface.co" />
 </head>
 <body>
 
@@ -133,7 +134,7 @@
           </svg>
         </div>
         <h1 class="welcome-title">LocalMind</h1>
-        <p class="welcome-subtitle">AI that runs entirely in your browser.<br/>Private, offline, and free.</p>
+        <p class="welcome-subtitle">AI that runs entirely in your browser.<br/>Private, offline, and free — with a browser helper if model setup fails.</p>
 
         <div class="welcome-model-status" id="welcome-model-status">
           <div class="model-badge" id="model-badge">
@@ -151,12 +152,12 @@
           <div class="welcome-card">
             <div class="welcome-card-icon" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><path d="M17.8 19.2L16 11l3.5-3.5C21 6 21 4 19.5 2.5S18 2 16.5 3.5L13 7 4.8 8.2c-.5.1-.7.6-.4 1l1.6 1.6-3.3 3.3c-.3.3-.3.8 0 1.1l1.1 1.1c.3.3.8.3 1.1 0l3.3-3.3 1.6 1.6c.4.3.9.1 1-.4z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
             <h3>Works Offline</h3>
-            <p>Once the model is downloaded, use it anywhere — no internet required.</p>
+            <p>The first download starts when you send a message. After that, cached models work offline.</p>
           </div>
           <div class="welcome-card">
             <div class="welcome-card-icon" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
             <h3>No API Keys</h3>
-            <p>No subscriptions, no rate limits, no sign-ups. Just open and chat.</p>
+            <p>Includes browser diagnostics for storage, WebGPU, offline status, and model download issues.</p>
           </div>
         </div>
 
@@ -216,7 +217,7 @@
           <textarea
             id="message-input"
             class="message-input"
-            placeholder="Message LocalMind…"
+            placeholder="Message LocalMind… Try /browser for diagnostics"
             rows="1"
             aria-label="Type your message"
             aria-multiline="true"
@@ -261,7 +262,7 @@
             <option value="Qwen/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B (~500MB)</option>
             <option value="onnx-community/Phi-3.5-mini-instruct-onnx-web">Phi-3.5 Mini (~2.3GB)</option>
           </select>
-          <p id="model-hint" class="form-hint">Changing the model will require a fresh download if not cached.</p>
+          <p id="model-hint" class="form-hint">Start with SmolLM2 360M. Bigger models need more storage/RAM and may take much longer to download.</p>
         </div>
         <div id="model-cache-status" class="model-cache-status">
           <!-- Cache status chips rendered here -->

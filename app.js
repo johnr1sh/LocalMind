@@ -47,15 +47,20 @@ async function init() {
   syncSettingsUI();
   refreshModelBadge();
 
-  // background model load — non-blocking
-  const modelId = app.settings.model || 'HuggingFaceTB/SmolLM2-360M-Instruct';
-  loadModel(modelId).catch(() => {});
+  // Warm cached models only. Avoid blocking first-run users behind a large download overlay.
+  const modelId = app.settings.model || AI.DEFAULT_MODEL;
+  if (await AI.isCached(modelId)) {
+    loadModel(modelId, { showPanel: false }).catch(() => refreshModelBadge('error', modelId));
+  } else {
+    refreshModelBadge('', modelId);
+  }
 }
 
 function supported() {
   return typeof indexedDB !== 'undefined'
     && typeof fetch !== 'undefined'
     && typeof WebAssembly !== 'undefined'
+    && typeof CSS !== 'undefined'
     && CSS.supports('display', 'grid');
 }
 
@@ -114,7 +119,7 @@ async function openConv(id) {
 }
 
 async function newConv() {
-  const conv = await DB.createConv({ model: app.settings.model || 'HuggingFaceTB/SmolLM2-360M-Instruct' });
+  const conv = await DB.createConv({ model: app.settings.model || AI.DEFAULT_MODEL });
   app.convs.unshift(conv);
   await openConv(conv.id);
   focusInput();
@@ -189,17 +194,26 @@ async function send(text) {
   UI.scrollBottom();
   document.getElementById('regenerate-btn').classList.remove('hidden');
 
+  if (text.trim().toLowerCase() === '/browser') {
+    const diagnostic = `Browser diagnostics from LocalMind:\n\n${await AI.browserDiagnostics()}\n\nTip: Send a normal message to load the local model, or ask about model download/storage problems for guided help.`;
+    const browserMsg = await DB.addMsg(id, 'assistant', diagnostic);
+    app.msgs.push(browserMsg);
+    document.getElementById('messages-container').appendChild(UI.msgEl(browserMsg));
+    UI.scrollBottom();
+    return;
+  }
+
   await runGeneration(id);
 }
 
 async function runGeneration(convId) {
   if (!AI.isLoaded()) {
-    const modelId = app.settings.model || 'HuggingFaceTB/SmolLM2-360M-Instruct';
+    const modelId = app.settings.model || AI.DEFAULT_MODEL;
     try {
       await loadModel(modelId);
     } catch (err) {
-      UI.showErr(`Model load failed: ${err.message}`);
-      return;
+      UI.showErr(`Model load failed. Browser Helper mode is active. ${err.message}`, 9000);
+      refreshModelBadge('fallback', modelId);
     }
   }
 
@@ -287,24 +301,29 @@ async function clearChat() {
 
 // ---- model loading ----
 
-async function loadModel(id) {
+async function loadModel(id, { showPanel = true } = {}) {
   refreshModelBadge('loading', id);
   await AI.loadModel(id, progress => {
-    UI.setProgress(progress);
+    if (showPanel) UI.setProgress(progress);
     if (progress.status === 'ready') refreshModelBadge('ready', id);
   });
 }
+
 
 function refreshModelBadge(status = 'loading', id = null) {
   const dot = document.getElementById('model-badge-dot');
   const name = document.getElementById('model-badge-name');
   if (!dot || !name) return;
 
-  const mid = id || app.settings.model || 'HuggingFaceTB/SmolLM2-360M-Instruct';
+  const mid = id || app.settings.model || AI.DEFAULT_MODEL;
   const info = AI.MODELS[mid];
 
   dot.className = `model-badge-dot ${status}`;
-  name.textContent = info ? info.name : mid.split('/')[1];
+  if (status === 'fallback') {
+    name.textContent = 'Browser Helper Mode';
+  } else {
+    name.textContent = info ? info.name : mid.split('/')[1];
+  }
 }
 
 // ---- input state ----
@@ -364,7 +383,7 @@ function syncSettingsUI() {
   const s = app.settings;
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
 
-  set('model-select', s.model || 'HuggingFaceTB/SmolLM2-360M-Instruct');
+  set('model-select', s.model || AI.DEFAULT_MODEL);
   set('temperature-input', s.temperature ?? 0.7);
   set('max-tokens-input', s.maxTokens ?? 512);
   set('top-p-input', s.topP ?? 0.9);
@@ -385,7 +404,7 @@ async function saveSettings() {
   const get = id => document.getElementById(id);
 
   const next = {
-    model: get('model-select')?.value || 'HuggingFaceTB/SmolLM2-360M-Instruct',
+    model: get('model-select')?.value || AI.DEFAULT_MODEL,
     temperature: parseFloat(get('temperature-input')?.value ?? 0.7),
     maxTokens: parseInt(get('max-tokens-input')?.value ?? 512),
     topP: parseFloat(get('top-p-input')?.value ?? 0.9),
