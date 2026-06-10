@@ -10,6 +10,8 @@ A ChatGPT-style chat app that runs entirely in your browser. No API keys, no ser
 - **Offline-capable** — works without internet after the first model download
 - **No account required** — zero sign-ups, rate limits, or subscriptions
 - **Persistent chat history** — stored in IndexedDB, survives page refreshes
+- **Resilient model setup** — shared downloads, WebGPU→WASM fallback, dtype fallback, and clear progress diagnostics
+- **Browser Helper mode** — if the model cannot download, LocalMind can still explain browser/storage/WebGPU status and recovery steps
 - **Multi-model support** — SmolLM2 360M, Qwen2.5 0.5B, Phi-3.5 Mini
 - **Streaming responses** — real-time token output
 - **Markdown rendering** — code blocks, lists, bold, italic, links
@@ -116,7 +118,7 @@ A ChatGPT-style chat app that runs entirely in your browser. No API keys, no ser
 | Qwen2.5 0.5B Instruct | ~500MB | Medium | Better |
 | Phi-3.5 Mini Instruct | ~2.3GB | Slow | Best |
 
-The app defaults to SmolLM2 360M — it's the best balance of speed and quality for browser inference.
+The app defaults to SmolLM2 360M — it's the best balance of speed and quality for browser inference. First-run downloads start when the user sends a message, so the welcome screen stays usable instead of blocking behind a large model transfer. If loading fails, Browser Helper mode provides diagnostics and recovery steps.
 
 ---
 
