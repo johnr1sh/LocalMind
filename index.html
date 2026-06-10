@@ -112,7 +112,8 @@
       <div class="model-loading-inner">
         <div class="model-loading-spinner" aria-hidden="true"></div>
         <h3 id="model-loading-title">Downloading AI Model</h3>
-        <p id="model-loading-desc">This only happens once. The model will be cached locally for offline use.</p>
+        <p id="model-loading-desc">LocalMind checks storage and memory before any first-time download.</p>
+        <div id="model-loading-health" class="system-health compact" aria-live="polite"></div>
         <div class="progress-bar-wrap" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progress-bar-wrap">
           <div class="progress-bar" id="progress-bar"></div>
         </div>
@@ -120,7 +121,7 @@
           <span id="progress-text">Initializing…</span>
           <span id="progress-percent">0%</span>
         </div>
-        <button id="cancel-load-btn" class="btn btn-ghost btn-sm">Cancel</button>
+        <button id="cancel-load-btn" class="btn btn-ghost btn-sm">Hide progress</button>
       </div>
     </div>
 
@@ -142,6 +143,8 @@
             <span id="model-badge-name">Loading…</span>
           </div>
         </div>
+
+        <div id="welcome-system-health" class="system-health" aria-live="polite"></div>
 
         <div class="welcome-grid">
           <div class="welcome-card">
@@ -258,12 +261,13 @@
         <div class="form-group">
           <label for="model-select" class="form-label">Active Model</label>
           <select id="model-select" class="form-select" aria-describedby="model-hint">
-            <option value="HuggingFaceTB/SmolLM2-360M-Instruct">SmolLM2 360M (Fast, ~360MB)</option>
+            <option value="HuggingFaceTB/SmolLM2-360M-Instruct">SmolLM2 360M (Safest, ~360MB)</option>
             <option value="Qwen/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B (~500MB)</option>
-            <option value="onnx-community/Phi-3.5-mini-instruct-onnx-web">Phi-3.5 Mini (~2.3GB)</option>
+            <option value="onnx-community/Phi-3.5-mini-instruct-onnx-web">Phi-3.5 Mini (Large, ~1.1GB)</option>
           </select>
-          <p id="model-hint" class="form-hint">Start with SmolLM2 360M. Bigger models need more storage/RAM and may take much longer to download.</p>
+          <p id="model-hint" class="form-hint">Start with SmolLM2 360M. LocalMind checks free browser storage and memory before downloading.</p>
         </div>
+        <div id="settings-system-health" class="system-health" aria-live="polite"></div>
         <div id="model-cache-status" class="model-cache-status">
           <!-- Cache status chips rendered here -->
         </div>

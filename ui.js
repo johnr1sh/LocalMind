@@ -383,7 +383,7 @@ export function confirmDlg(title, msg, okLabel = 'Delete') {
 
 // ---- progress bar ----
 
-export function setProgress({ status, progress, text, file, loaded, total, device, dtype }) {
+export function setProgress({ status, progress, text, file, loaded, total, device, dtype, health, modelName, downloadMB }) {
   const panel = document.getElementById('model-loading-panel');
   const bar = document.getElementById('progress-bar');
   const wrap = document.getElementById('progress-bar-wrap');
@@ -391,6 +391,7 @@ export function setProgress({ status, progress, text, file, loaded, total, devic
   const txt = document.getElementById('progress-text');
   const title = document.getElementById('model-loading-title');
   const desc = document.getElementById('model-loading-desc');
+  const healthEl = document.getElementById('model-loading-health');
 
   if (!panel) return;
 
@@ -402,45 +403,101 @@ export function setProgress({ status, progress, text, file, loaded, total, devic
   }
 
   panel.classList.remove('hidden');
+  if (healthEl && health) renderSystemHealth(healthEl, health, { compact: true });
+
+  const expectedMB = downloadMB || health?.downloadMB;
 
   if (status === 'initiate') {
-    title.textContent = 'Preparing Model';
-    desc.textContent = text || 'Initializing…';
+    title.textContent = 'Checking Device Safety';
+    desc.textContent = text || 'Verifying storage, memory, and browser capability before downloading.';
     bar.style.width = '0%';
+    wrap.removeAttribute('data-indeterminate');
     pct.textContent = '0%';
-    txt.textContent = text || 'Starting…';
-    if (device || dtype) desc.textContent = `${device || 'browser'} / ${dtype || 'auto'}`;
+    txt.textContent = expectedMB ? `No download started yet · expected ${formatSize(expectedMB)} download` : (text || 'Starting…');
+    if (device || dtype) desc.textContent = `Starting ${device?.toUpperCase() || 'browser'} (${dtype || 'auto'}). Keep this tab open.`;
     return;
   }
 
   if (status === 'retry') {
-    title.textContent = 'Trying Another Runtime';
-    desc.textContent = text || 'The previous runtime failed. Trying a safer fallback…';
+    title.textContent = 'Trying Safer Runtime';
+    desc.textContent = text || 'The previous runtime failed. Trying a safer fallback automatically.';
     txt.textContent = `${device || 'Runtime'} ${dtype || ''}`.trim();
     bar.style.width = '12%';
+    wrap.removeAttribute('data-indeterminate');
     pct.textContent = '12%';
     return;
   }
 
   if (status === 'download' || status === 'progress') {
-    const p = progress ? Math.round(progress) : 0;
-    bar.style.width = `${p}%`;
+    const hasProgress = Number.isFinite(progress) && progress > 0;
+    const p = hasProgress ? Math.max(1, Math.min(100, Math.round(progress))) : 0;
+    const fname = file ? file.split('/').pop() : `${modelName || 'Model'} files`;
+    const lMB = Number.isFinite(loaded) ? (loaded / 1048576).toFixed(1) : null;
+    const tMB = Number.isFinite(total) && total > 0 ? (total / 1048576).toFixed(1) : null;
+
     wrap.setAttribute('aria-valuenow', p);
-    pct.textContent = `${p}%`;
-    const fname = file ? file.split('/').pop() : 'Model files';
-    const lMB = loaded ? (loaded / 1048576).toFixed(1) : '?';
-    const tMB = total ? (total / 1048576).toFixed(1) : '?';
-    txt.textContent = total ? `${fname} — ${lMB}MB / ${tMB}MB` : `${fname} — downloading…`;
-    title.textContent = 'Downloading AI Model';
-    desc.textContent = device ? `Using ${device.toUpperCase()} (${dtype || 'auto'}). Keep this tab open for the first download.` : 'Keep this tab open for the first download.';
+    pct.textContent = hasProgress ? `${p}%` : 'Starting';
+    if (hasProgress) {
+      wrap.removeAttribute('data-indeterminate');
+      bar.style.width = `${p}%`;
+    } else {
+      wrap.setAttribute('data-indeterminate', 'true');
+      bar.style.width = '36%';
+    }
+
+    if (tMB) {
+      txt.textContent = `${fname} — ${lMB || '0.0'}MB / ${tMB}MB`;
+    } else if (lMB) {
+      txt.textContent = `${fname} — received ${lMB}MB · expected about ${formatSize(expectedMB)}`;
+    } else {
+      txt.textContent = `${fname} — waiting for browser progress · expected about ${formatSize(expectedMB)}`;
+    }
+    title.textContent = 'Downloading Private AI Model';
+    desc.textContent = device
+      ? `Using ${device.toUpperCase()} (${dtype || 'auto'}). Download continues only after the safety check passed.`
+      : 'Download continues only after the safety check passed. Keep this tab open.';
   }
 
   if (status === 'loading') {
-    title.textContent = 'Loading into Memory';
+    title.textContent = 'Loading Model into Memory';
     txt.textContent = file ? `Loading ${file.split('/').pop()}…` : (text || 'Loading…');
+    wrap.removeAttribute('data-indeterminate');
     bar.style.width = '90%';
     pct.textContent = '90%';
   }
+}
+
+function formatSize(mb) {
+  if (!Number.isFinite(mb)) return 'unknown size';
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)}GB` : `${Math.round(mb)}MB`;
+}
+
+export function renderSystemHealth(el, health, { compact = false } = {}) {
+  if (!el || !health) return;
+  const status = health.level === 'good' ? 'Recommended' : health.level === 'warn' ? 'Use with caution' : 'Blocked for safety';
+  const details = [
+    ['Model download', formatSize(health.downloadMB)],
+    ['Free browser storage', health.freeMB === null ? 'Not reported' : formatSize(health.freeMB)],
+    ['Storage needed', formatSize(health.storageMB)],
+    ['Device memory', health.deviceMemoryGB === null ? 'Not reported' : `${health.deviceMemoryGB}GB`],
+    ['WebGPU', health.webgpu ? 'Available' : 'Not available'],
+  ];
+
+  el.className = `system-health system-health-${health.level}${compact ? ' compact' : ''}`;
+  el.innerHTML = `
+    <div class="system-health-head">
+      <span class="system-health-dot" aria-hidden="true"></span>
+      <div>
+        <strong>${esc(status)}</strong>
+        <p>${esc(health.cached ? 'Model is already cached on this device.' : health.modelName + ' will run locally after the first download.')}</p>
+      </div>
+    </div>
+    <div class="system-health-grid">
+      ${details.map(([k, v]) => `<div><span>${esc(k)}</span><strong>${esc(String(v))}</strong></div>`).join('')}
+    </div>
+    ${health.issues.length || health.warnings.length ? `<ul class="system-health-notes">
+      ${[...health.issues, ...health.warnings].slice(0, compact ? 3 : 6).map(note => `<li>${esc(note)}</li>`).join('')}
+    </ul>` : ''}`;
 }
 
 // ---- misc helpers ----

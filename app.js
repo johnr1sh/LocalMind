@@ -17,6 +17,7 @@ const app = {
   settings: {},
   generating: false,
   query: '',
+  lastHealth: null,
 };
 
 // ---- boot ----
@@ -46,6 +47,7 @@ async function init() {
   renderSidebar();
   syncSettingsUI();
   refreshModelBadge();
+  await refreshSystemHealth();
 
   // Warm cached models only. Avoid blocking first-run users behind a large download overlay.
   const modelId = app.settings.model || AI.DEFAULT_MODEL;
@@ -302,10 +304,16 @@ async function clearChat() {
 // ---- model loading ----
 
 async function loadModel(id, { showPanel = true } = {}) {
+  const health = await ensureModelSafeToLoad(id);
   refreshModelBadge('loading', id);
+  if (showPanel) UI.setProgress({ status: 'initiate', modelName: health.modelName, downloadMB: health.downloadMB, health });
   await AI.loadModel(id, progress => {
-    if (showPanel) UI.setProgress(progress);
-    if (progress.status === 'ready') refreshModelBadge('ready', id);
+    const withHealth = { ...progress, modelName: health.modelName, downloadMB: health.downloadMB, health };
+    if (showPanel) UI.setProgress(withHealth);
+    if (progress.status === 'ready') {
+      refreshModelBadge('ready', id);
+      refreshSystemHealth(id);
+    }
   });
 }
 
@@ -398,6 +406,7 @@ function syncSettingsUI() {
   if (topVal) topVal.textContent = parseFloat(s.topP ?? 0.9).toFixed(2);
 
   refreshCacheChips();
+  refreshSystemHealth(s.model || AI.DEFAULT_MODEL);
 }
 
 async function saveSettings() {
@@ -417,12 +426,12 @@ async function saveSettings() {
 
   setTheme(next.theme);
   refreshModelBadge();
+  await refreshSystemHealth(next.model);
 
   UI.hideModal('settings-modal');
 
   if (next.model !== AI.getModelId()) {
-    UI.showOk('Settings saved. Loading new model…');
-    loadModel(next.model).catch(e => UI.showErr(e.message));
+    UI.showOk('Settings saved. Safety check will run before downloading the new model.');
   } else {
     UI.showOk('Settings saved.');
   }
@@ -442,6 +451,48 @@ async function refreshCacheChips() {
       <span class="model-cache-chip-status ${cached ? 'cached' : 'not-cached'}">${cached ? 'Cached' : 'Not downloaded'}</span>`;
     el.appendChild(chip);
   }
+}
+
+
+async function refreshSystemHealth(modelId = app.settings.model || AI.DEFAULT_MODEL) {
+  const health = await AI.systemHealth(modelId);
+  app.lastHealth = health;
+
+  const welcome = document.getElementById('welcome-system-health');
+  const settings = document.getElementById('settings-system-health');
+  if (welcome) UI.renderSystemHealth(welcome, health);
+  if (settings) UI.renderSystemHealth(settings, health);
+
+  const hint = document.getElementById('model-hint');
+  if (hint) {
+    hint.textContent = health.safe
+      ? `${health.modelName}: ${AI.formatMB(health.downloadMB)} first download, needs about ${AI.formatMB(health.storageMB)} free browser storage. ${health.recommended ? 'Recommended for this device.' : 'Usable with caution; see health notes below.'}`
+      : `${health.modelName} is blocked for device safety. Choose a smaller model or free storage first.`;
+  }
+
+  return health;
+}
+
+async function ensureModelSafeToLoad(modelId) {
+  const cached = await AI.isCached(modelId);
+  if (cached) return AI.systemHealth(modelId);
+
+  const health = await refreshSystemHealth(modelId);
+  if (!health.safe) {
+    throw new Error(`Download blocked for device safety. ${health.issues.join(' ')}`);
+  }
+
+  if (!health.recommended) {
+    const notes = health.warnings.length ? `\n\nCaution:\n- ${health.warnings.join('\n- ')}` : '';
+    const ok = await UI.confirmDlg(
+      'Device Safety Check',
+      `${health.modelName} is usable, but not ideal for this device.\n\nDownload: ${AI.formatMB(health.downloadMB)}\nStorage needed: ${AI.formatMB(health.storageMB)}\nFree browser storage: ${health.freeMB === null ? 'Not reported' : AI.formatMB(health.freeMB)}\nDevice memory: ${health.deviceMemoryGB === null ? 'Not reported' : `${health.deviceMemoryGB}GB`}${notes}\n\nContinue only if you are okay with slower performance.`,
+      'Continue Download'
+    );
+    if (!ok) throw new Error('Download cancelled after device safety warning.');
+  }
+
+  return health;
 }
 
 // ---- import / export ----
@@ -537,6 +588,8 @@ function bindAll() {
   $('settings-close-btn').addEventListener('click', () => UI.hideModal('settings-modal'));
   $('settings-backdrop').addEventListener('click', () => UI.hideModal('settings-modal'));
   $('settings-save-btn').addEventListener('click', saveSettings);
+
+  $('model-select').addEventListener('change', e => refreshSystemHealth(e.target.value));
 
   // live range preview
   $('temperature-input').addEventListener('input', e => { $('temperature-value').textContent = parseFloat(e.target.value).toFixed(2); });

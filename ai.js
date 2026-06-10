@@ -11,28 +11,125 @@ import { pipeline, TextStreamer, env } from 'https://cdn.jsdelivr.net/npm/@huggi
 export const MODELS = {
   'HuggingFaceTB/SmolLM2-360M-Instruct': {
     name: 'SmolLM2 360M',
-    desc: 'Fast, lightweight — best first download for most browsers',
-    size: '~360MB',
+    desc: 'Fast, lightweight — safest first download for most browsers',
+    size: '~360MB download',
+    downloadMB: 360,
+    storageMB: 650,
+    runtimeMB: 1200,
+    minDeviceMemoryGB: 4,
+    recommendedDeviceMemoryGB: 8,
     dtype: 'q4f16',
     fallbacks: ['q4f16', 'q4', 'q8'],
   },
   'Qwen/Qwen2.5-0.5B-Instruct': {
     name: 'Qwen2.5 0.5B',
-    desc: 'Slightly larger, better reasoning',
-    size: '~500MB',
+    desc: 'More capable, still reasonable on modern laptops',
+    size: '~500MB download',
+    downloadMB: 500,
+    storageMB: 850,
+    runtimeMB: 1600,
+    minDeviceMemoryGB: 6,
+    recommendedDeviceMemoryGB: 8,
     dtype: 'q4',
     fallbacks: ['q4', 'q4f16', 'q8'],
   },
   'onnx-community/Phi-3.5-mini-instruct-onnx-web': {
     name: 'Phi-3.5 Mini',
-    desc: 'Most capable, needs more RAM and patience',
-    size: '~2.3GB',
+    desc: 'Largest local model — only for devices with plenty of free storage/RAM',
+    size: '~1.1GB download',
+    downloadMB: 1120,
+    storageMB: 1800,
+    runtimeMB: 3500,
+    minDeviceMemoryGB: 8,
+    recommendedDeviceMemoryGB: 16,
     dtype: 'q4',
     fallbacks: ['q4', 'q4f16'],
   },
 };
 
 export const DEFAULT_MODEL = 'HuggingFaceTB/SmolLM2-360M-Instruct';
+
+export function formatMB(mb) {
+  if (!Number.isFinite(mb)) return 'unknown';
+  return mb >= 1024 ? `${(mb / 1024).toFixed(mb >= 10240 ? 0 : 1)}GB` : `${Math.round(mb)}MB`;
+}
+
+export async function systemHealth(modelId = DEFAULT_MODEL) {
+  const cfg = MODELS[modelId] || MODELS[DEFAULT_MODEL];
+  let usageMB = null;
+  let quotaMB = null;
+  let freeMB = null;
+  let persisted = false;
+
+  if (navigator.storage?.estimate) {
+    try {
+      const { usage = 0, quota = 0 } = await navigator.storage.estimate();
+      usageMB = usage / 1048576;
+      quotaMB = quota / 1048576;
+      freeMB = Math.max(0, quotaMB - usageMB);
+    } catch {
+      // Leave storage values unknown; the UI will explain that clearly.
+    }
+  }
+
+  if (navigator.storage?.persisted) {
+    try { persisted = await navigator.storage.persisted(); } catch { persisted = false; }
+  }
+
+  const deviceMemoryGB = Number.isFinite(navigator.deviceMemory) ? navigator.deviceMemory : null;
+  const cores = Number.isFinite(navigator.hardwareConcurrency) ? navigator.hardwareConcurrency : null;
+  const webgpu = 'gpu' in navigator;
+  const online = navigator.onLine;
+  const cached = await isCached(modelId);
+
+  const issues = [];
+  const warnings = [];
+  if (!online && !cached) issues.push('First-time model download needs an internet connection.');
+  if (freeMB !== null && freeMB < cfg.storageMB && !cached) {
+    issues.push(`Not enough browser storage. Needs about ${formatMB(cfg.storageMB)} free; available is ${formatMB(freeMB)}.`);
+  }
+  if (freeMB === null && cfg.downloadMB > 700 && !cached) {
+    issues.push('Browser did not report free storage, so this large model is blocked for device safety.');
+  }
+  if (deviceMemoryGB !== null && deviceMemoryGB < cfg.minDeviceMemoryGB) {
+    issues.push(`Device memory looks too low. This model needs at least ${cfg.minDeviceMemoryGB}GB; browser reports ${deviceMemoryGB}GB.`);
+  }
+  if (deviceMemoryGB === null && cfg.downloadMB > 700) {
+    warnings.push('Memory is not reported by this browser; use a smaller model unless you know this device has enough RAM.');
+  }
+  if (!webgpu) warnings.push('WebGPU is unavailable, so responses may be slower on CPU/WASM.');
+  if (freeMB !== null && freeMB < cfg.storageMB * 1.5 && !cached) warnings.push('Storage margin is tight; close other apps/tabs and keep space free during setup.');
+  if (deviceMemoryGB !== null && deviceMemoryGB < cfg.recommendedDeviceMemoryGB) warnings.push(`Recommended memory is ${cfg.recommendedDeviceMemoryGB}GB+ for smoother use.`);
+
+  const safe = issues.length === 0;
+  const recommended = safe && warnings.length === 0;
+  const level = !safe ? 'danger' : recommended ? 'good' : 'warn';
+
+  return {
+    modelId,
+    modelName: cfg.name,
+    cached,
+    online,
+    webgpu,
+    cores,
+    persisted,
+    usageMB,
+    quotaMB,
+    freeMB,
+    deviceMemoryGB,
+    downloadMB: cfg.downloadMB,
+    storageMB: cfg.storageMB,
+    runtimeMB: cfg.runtimeMB,
+    minDeviceMemoryGB: cfg.minDeviceMemoryGB,
+    recommendedDeviceMemoryGB: cfg.recommendedDeviceMemoryGB,
+    safe,
+    recommended,
+    level,
+    issues,
+    warnings,
+  };
+}
+
 
 export const DEFAULT_GEN = {
   temperature: 0.7,
@@ -235,12 +332,17 @@ export async function browserDiagnostics() {
   parts.push(`- Online: ${navigator.onLine ? 'yes' : 'no'}`);
   parts.push(`- WebGPU: ${'gpu' in navigator ? 'available' : 'not available'}`);
   parts.push(`- WebAssembly: ${typeof WebAssembly !== 'undefined' ? 'available' : 'not available'}`);
+  parts.push(`- Device memory: ${Number.isFinite(navigator.deviceMemory) ? `${navigator.deviceMemory} GB` : 'not reported'}`);
+  parts.push(`- CPU cores: ${Number.isFinite(navigator.hardwareConcurrency) ? navigator.hardwareConcurrency : 'not reported'}`);
   parts.push(`- Browser: ${navigator.userAgent}`);
   if (navigator.storage?.estimate) {
     try {
       const { usage = 0, quota = 0 } = await navigator.storage.estimate();
-      parts.push(`- Storage used: ${(usage / 1048576).toFixed(0)} MB`);
-      parts.push(`- Storage quota: ${(quota / 1048576).toFixed(0)} MB`);
+      const usedMB = usage / 1048576;
+      const quotaMB = quota / 1048576;
+      parts.push(`- Storage used: ${usedMB.toFixed(0)} MB`);
+      parts.push(`- Storage quota: ${quotaMB.toFixed(0)} MB`);
+      parts.push(`- Storage available to browser: ${Math.max(0, quotaMB - usedMB).toFixed(0)} MB`);
     } catch {
       parts.push('- Storage estimate: unavailable');
     }
