@@ -114,13 +114,21 @@ async function searchConversations(query) {
   const token = ++app.searchSeq;
   const term = query.trim().toLocaleLowerCase();
   if (!term) { app.searchMatches = null; renderSidebar(); return; }
-  const results = await Promise.all(app.convs.map(async conv => {
-    if ((conv.title || '').toLocaleLowerCase().includes(term)) return conv;
+  const results = [];
+  // Scan one conversation at a time to keep peak memory low on large histories.
+  for (const conv of app.convs) {
+    if ((conv.title || '').toLocaleLowerCase().includes(term)) {
+      results.push(conv);
+      continue;
+    }
     const messages = await DB.getMsgs(conv.id);
-    return messages.some(message => message.content.toLocaleLowerCase().includes(term)) ? conv : null;
-  }));
+    if (messages.some(message => message.content.toLocaleLowerCase().includes(term))) {
+      results.push(conv);
+    }
+    if (token !== app.searchSeq) return;
+  }
   if (token !== app.searchSeq) return;
-  app.searchMatches = results.filter(Boolean);
+  app.searchMatches = results;
   renderSidebar();
 }
 
