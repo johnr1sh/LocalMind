@@ -14,11 +14,14 @@ const S = {
 };
 
 let db = null;
+let opening = null;
 
 export function open() {
   if (db) return Promise.resolve(db);
+  if (opening) return opening;
 
-  return new Promise((res, rej) => {
+  opening = new Promise((res, rej) => {
+    let settled = false;
     const req = indexedDB.open(DB_NAME, DB_VER);
 
     req.onupgradeneeded = e => {
@@ -40,8 +43,31 @@ export function open() {
       }
     };
 
-    req.onsuccess = e => { db = e.target.result; res(db); };
-    req.onerror = e => rej(e.target.error);
+    req.onsuccess = e => {
+      db = e.target.result;
+      db.onversionchange = () => {
+        db.close();
+        db = null;
+      };
+      settled = true;
+      res(db);
+    };
+    req.onerror = e => {
+      if (!settled) rej(e.target.error || new Error('Could not open LocalMind storage.'));
+    };
+    req.onblocked = () => {
+      if (!settled) rej(new Error('LocalMind storage is blocked by another open tab. Close other LocalMind tabs and retry.'));
+    };
+  }).finally(() => { opening = null; });
+
+  return opening;
+}
+
+function transactionDone(tx) {
+  return new Promise((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => reject(tx.error || new Error('Storage transaction was aborted.'));
+    tx.onerror = () => reject(tx.error || new Error('Storage transaction failed.'));
   });
 }
 
@@ -194,26 +220,66 @@ export async function exportData() {
 }
 
 export async function importData(data) {
-  if (!data || data.version !== 1) throw new Error('Incompatible export file (expected version 1).');
-
-  const d = await open();
-
-  if (data.convs) {
-    const tx = d.transaction(S.CONVS, 'readwrite');
-    const store = tx.objectStore(S.CONVS);
-    for (const c of data.convs) await wrap(store.put(c));
+  if (!data || data.version !== 1) {
+    throw new Error('Incompatible export file (expected version 1).');
+  }
+  if (!Array.isArray(data.convs) || !data.msgs || typeof data.msgs !== 'object' || Array.isArray(data.msgs)) {
+    throw new Error('Invalid backup: conversations and message records are required.');
+  }
+  if (data.settings !== undefined && (!data.settings || typeof data.settings !== 'object' || Array.isArray(data.settings))) {
+    throw new Error('Invalid backup: settings must be an object.');
   }
 
-  if (data.msgs) {
-    const tx = d.transaction(S.MSGS, 'readwrite');
-    const store = tx.objectStore(S.MSGS);
-    for (const list of Object.values(data.msgs)) {
-      for (const m of list) await wrap(store.put(m));
+  // Validate the complete backup before opening a write transaction. A malformed
+  // file must never leave the user's existing history half-imported.
+  const convIds = new Set();
+  for (const conv of data.convs) {
+    if (!conv || typeof conv.id !== 'string' || !conv.id || typeof conv.title !== 'string'
+      || !Number.isFinite(conv.createdAt) || !Number.isFinite(conv.updatedAt)) {
+      throw new Error('Invalid backup: a conversation record is malformed.');
+    }
+    if (convIds.has(conv.id)) throw new Error('Invalid backup: duplicate conversation IDs were found.');
+    convIds.add(conv.id);
+  }
+
+  const messages = [];
+  for (const [convId, list] of Object.entries(data.msgs)) {
+    if (!convIds.has(convId) || !Array.isArray(list)) {
+      throw new Error('Invalid backup: messages reference an unknown conversation.');
+    }
+    for (const msg of list) {
+      if (!msg || typeof msg.id !== 'string' || !msg.id || msg.convId !== convId
+        || !['user', 'assistant', 'system'].includes(msg.role)
+        || typeof msg.content !== 'string' || msg.content.length > 2_000_000
+        || !Number.isFinite(msg.createdAt)) {
+        throw new Error('Invalid backup: a message record is malformed or too large.');
+      }
+      messages.push(msg);
     }
   }
 
-  if (data.settings) {
-    for (const [k, v] of Object.entries(data.settings)) await setSetting(k, v);
+  const settings = Object.entries(data.settings || {});
+  if (settings.some(([key]) => !key || key.length > 200)) {
+    throw new Error('Invalid backup: a setting key is invalid.');
+  }
+
+  const d = await open();
+  const tx = d.transaction([S.CONVS, S.MSGS, S.SETTINGS], 'readwrite');
+  const done = transactionDone(tx);
+
+  try {
+    const convStore = tx.objectStore(S.CONVS);
+    const msgStore = tx.objectStore(S.MSGS);
+    const settingStore = tx.objectStore(S.SETTINGS);
+
+    for (const conv of data.convs) convStore.put(conv);
+    for (const msg of messages) msgStore.put(msg);
+    for (const [key, value] of settings) settingStore.put({ key, value });
+
+    await done;
+  } catch (err) {
+    try { tx.abort(); } catch { /* transaction may already be complete */ }
+    throw err;
   }
 }
 
