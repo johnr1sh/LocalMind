@@ -98,7 +98,7 @@ function renderSidebar() {
   UI.renderConvList(app.searchMatches || app.convs, app.activeId, {
     onSelect: openConv, onRename: renameConv, onDelete: deleteConv,
     onTogglePin: togglePinConv,
-  });
+  }, app.query);
 }
 
 async function togglePinConv(id) {
@@ -550,9 +550,9 @@ async function exportCurrentChat() {
     const messages = await DB.getMsgs(app.activeId);
     const title = conv?.title || 'Conversation';
     const body = messages.filter(m => m.role !== 'system').map(m =>
-      `## ${m.role === 'assistant' ? 'LocalMind' : 'You'}\\n\\n${m.content}`
-    ).join('\\n\\n');
-    const markdown = `# ${title}\\n\\nExported from LocalMind on ${new Date().toLocaleString()}.\\n\\n${body}\\n`;
+      `## ${m.role === 'assistant' ? 'LocalMind' : 'You'}\n\n${m.content}`
+    ).join('\n\n');
+    const markdown = `# ${title}\n\nExported from LocalMind on ${new Date().toLocaleString()}.\n\n${body}\n`;
     const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const safe = title.normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'conversation';
