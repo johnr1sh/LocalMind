@@ -238,9 +238,8 @@ export function renderConvList(convs, activeId, handlers, query = '') {
   const el = document.getElementById('conversations-list');
   if (!el) return;
 
-  const filtered = query
-    ? convs.filter(c => c.title.toLowerCase().includes(query.toLowerCase()))
-    : convs;
+  // The controller already searches titles and message bodies; do not filter twice here.
+  const filtered = convs;
 
   if (!filtered.length) {
     el.innerHTML = `<div class="conversations-empty">${
