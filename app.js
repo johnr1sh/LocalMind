@@ -209,6 +209,11 @@ async function send(text) {
 }
 
 async function runGeneration(convId) {
+  if (app.generating) return;
+  // Lock immediately, including while a first-run model download is in progress.
+  // Otherwise rapid sends can start parallel generations against one pipeline.
+  app.generating = true;
+
   if (!AI.isLoaded()) {
     const modelId = app.settings.model || AI.DEFAULT_MODEL;
     try {
@@ -220,7 +225,6 @@ async function runGeneration(convId) {
     }
   }
 
-  app.generating = true;
   setInputEnabled(false);
   document.getElementById('typing-indicator').classList.remove('hidden');
   UI.scrollBottom();
@@ -277,18 +281,17 @@ async function runGeneration(convId) {
 }
 
 async function regenerate() {
-  if (app.generating || !app.activeId) return;
+  if (app.generating || !app.activeId || !app.msgs.length) return;
 
-  // remove last assistant message
-  const idx = [...app.msgs].reverse().findIndex(m => m.role === 'assistant');
-  if (idx === -1) return;
-
-  const real = app.msgs.length - 1 - idx;
-  const last = app.msgs[real];
-
-  await DB.deleteMsg(last.id);
-  app.msgs.splice(real, 1);
-  document.querySelector(`[data-msg-id="${last.id}"]`)?.remove();
+  // Retry the latest unanswered user message without deleting an older answer.
+  const last = app.msgs[app.msgs.length - 1];
+  if (last.role === 'assistant') {
+    await DB.deleteMsg(last.id);
+    app.msgs.pop();
+    document.querySelector(`[data-msg-id="${last.id}"]`)?.remove();
+  } else if (last.role !== 'user') {
+    return;
+  }
 
   await runGeneration(app.activeId);
 }
