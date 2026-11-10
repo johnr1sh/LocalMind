@@ -61,13 +61,13 @@ export function md(text) {
 }
 
 function safeMarkdownHref(value) {
-  if (!value || /[\\u0000-\\u001f\\u007f]/.test(value)) return null;
+  if (!value || /[\u0000-\u001f\u007f]/.test(value)) return null;
   if (value.startsWith('//')) return null;
 
   try {
     const parsed = new URL(value, document.baseURI);
     if (!['http:', 'https:', 'mailto:'].includes(parsed.protocol)) return null;
-    if (parsed.protocol === 'mailto:' && !/^mailto:[^\\s@]+@[^\\s@]+$/i.test(value)) return null;
+    if (parsed.protocol === 'mailto:' && !/^mailto:[^\s@]+@[^\s@]+$/i.test(value)) return null;
     return value;
   } catch {
     return null;
