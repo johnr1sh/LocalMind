@@ -159,6 +159,16 @@ function setupEnv() {
   env.allowLocalModels = false;
   env.useBrowserCache = true;
   env.useIndexedDB = true;
+
+  // Keep ONNX Runtime on the main thread and use single-threaded WASM.
+  // This avoids cross-origin Worker construction from the Transformers CDN,
+  // which is blocked by browsers when the worker URL is not same-origin.
+  // LocalMind is a static, no-build app, so it cannot rewrite CDN worker URLs.
+  const wasm = env.backends?.onnx?.wasm;
+  if (wasm) {
+    wasm.proxy = false;
+    wasm.numThreads = 1;
+  }
 }
 
 function normalizeProgress(update, modelId, attempt = {}) {

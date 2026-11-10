@@ -9,7 +9,7 @@
  * a much faster install and no quota issues.
  */
 
-const VER = 'v1.3.0';
+const VER = 'v1.4.0';
 const STATIC = `lm-static-${VER}`;
 // Keep the model cache stable across app releases: model files are large and
 // should not be downloaded again just because the UI or controller changed.
