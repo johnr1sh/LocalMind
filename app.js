@@ -18,6 +18,8 @@ const app = {
   generating: false,
   query: '',
   lastHealth: null,
+  searchMatches: null,
+  searchSeq: 0,
 };
 
 // ---- boot ----
@@ -93,11 +95,33 @@ function setTheme(t) {
 // ---- sidebar ----
 
 function renderSidebar() {
-  UI.renderConvList(app.convs, app.activeId, {
-    onSelect: openConv,
-    onRename: renameConv,
-    onDelete: deleteConv,
-  }, app.query);
+  UI.renderConvList(app.searchMatches || app.convs, app.activeId, {
+    onSelect: openConv, onRename: renameConv, onDelete: deleteConv,
+    onTogglePin: togglePinConv,
+  });
+}
+
+async function togglePinConv(id) {
+  const conv = app.convs.find(item => item.id === id);
+  if (!conv) return;
+  conv.pinned = !conv.pinned;
+  await DB.updateConv(id, { pinned: conv.pinned });
+  renderSidebar();
+  UI.showOk(conv.pinned ? 'Conversation pinned.' : 'Conversation unpinned.');
+}
+
+async function searchConversations(query) {
+  const token = ++app.searchSeq;
+  const term = query.trim().toLocaleLowerCase();
+  if (!term) { app.searchMatches = null; renderSidebar(); return; }
+  const results = await Promise.all(app.convs.map(async conv => {
+    if ((conv.title || '').toLocaleLowerCase().includes(term)) return conv;
+    const messages = await DB.getMsgs(conv.id);
+    return messages.some(message => message.content.toLocaleLowerCase().includes(term)) ? conv : null;
+  }));
+  if (token !== app.searchSeq) return;
+  app.searchMatches = results.filter(Boolean);
+  renderSidebar();
 }
 
 // ---- conversations ----
@@ -519,6 +543,26 @@ async function ensureModelSafeToLoad(modelId) {
 
 // ---- import / export ----
 
+async function exportCurrentChat() {
+  if (!app.activeId) return UI.showErr('Open a conversation before exporting it.');
+  try {
+    const conv = app.convs.find(item => item.id === app.activeId);
+    const messages = await DB.getMsgs(app.activeId);
+    const title = conv?.title || 'Conversation';
+    const body = messages.filter(m => m.role !== 'system').map(m =>
+      `## ${m.role === 'assistant' ? 'LocalMind' : 'You'}\\n\\n${m.content}`
+    ).join('\\n\\n');
+    const markdown = `# ${title}\\n\\nExported from LocalMind on ${new Date().toLocaleString()}.\\n\\n${body}\\n`;
+    const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const safe = title.normalize('NFKD').replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'conversation';
+    const link = Object.assign(document.createElement('a'), { href: url, download: `localmind-${safe}.md` });
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    UI.showOk('Conversation exported as Markdown.');
+  } catch (err) { UI.showErr(`Conversation export failed: ${err.message}`); }
+}
+
 async function exportChats() {
   try {
     const data = await DB.exportData();
@@ -604,6 +648,14 @@ function bindAll() {
   });
 
   $('regenerate-btn').addEventListener('click', regenerate);
+  $('export-current-chat-btn').addEventListener('click', exportCurrentChat);
+  document.querySelectorAll('[data-prompt]').forEach(button => {
+    button.addEventListener('click', async () => {
+      if (!button.dataset.prompt || app.generating) return;
+      await newConv();
+      await send(button.dataset.prompt);
+    });
+  });
   $('clear-chat-btn').addEventListener('click', clearChat);
 
   $('settings-btn').addEventListener('click', () => { syncSettingsUI(); UI.showModal('settings-modal'); });
@@ -652,9 +704,11 @@ function bindAll() {
     e.target.value = '';
   });
 
+  let searchTimer;
   $('search-conversations').addEventListener('input', e => {
     app.query = e.target.value;
-    renderSidebar();
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => searchConversations(app.query), 120);
   });
 
   $('update-reload-btn').addEventListener('click', () => location.reload());
