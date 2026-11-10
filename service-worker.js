@@ -9,13 +9,16 @@
  * a much faster install and no quota issues.
  */
 
-const VER = 'v1.4.0';
+const VER = 'v1.5.0';
 const STATIC = `lm-static-${VER}`;
 // Keep the model cache stable across app releases: model files are large and
 // should not be downloaded again just because the UI or controller changed.
-const MODELS = 'lm-models-v1.2.0';
+// NOTE: model weights are NOT cached here any more. Transformers.js already stores
+// them in its own Cache Storage bucket ('transformers-cache'); also caching them in
+// the service worker doubled disk usage and buffered hundreds of MB of tee'd stream
+// in memory during download (a common cause of "Array buffer allocation failed").
 const RUNTIME = `lm-rt-${VER}`;
-const ALL = [STATIC, MODELS, RUNTIME];
+const ALL = [STATIC, RUNTIME];
 
 const PRECACHE = [
   './',
@@ -43,7 +46,8 @@ self.addEventListener('activate', e => {
   e.waitUntil(
     Promise.all([
       caches.keys().then(keys =>
-        Promise.all(keys.filter(k => !ALL.includes(k) && !k.startsWith('lm-models-')).map(k => caches.delete(k)))
+        // Drops old app/runtime buckets AND the old duplicate lm-models-* copies.
+        Promise.all(keys.filter(k => k.startsWith('lm-') && !ALL.includes(k)).map(k => caches.delete(k)))
       ),
       self.clients.claim(),
     ])
@@ -56,9 +60,11 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   if (!url.protocol.startsWith('http')) return;
 
-  if (isModel(url)) {
-    e.respondWith(cacheFirst(e.request, MODELS));
-  } else if (isCDN(url)) {
+  // Let model downloads (huggingface.co, hf.co, xet/cdn-lfs) go straight to the
+  // network so Transformers.js can stream, range-request and cache them itself.
+  if (isModel(url)) return;
+
+  if (isCDN(url)) {
     e.respondWith(cacheFirst(e.request, RUNTIME));
   } else if (isStatic(url)) {
     e.respondWith(cacheFirst(e.request, STATIC));
@@ -75,7 +81,7 @@ async function cacheFirst(req, cacheName) {
 
     const res = await fetch(req.clone());
     if (res.ok && res.status === 200) {
-      c.put(req, res.clone()); // async, don't await
+      c.put(req, res.clone()).catch(() => {}); // async; ignore quota errors
     }
     return res;
   } catch (err) {
@@ -111,7 +117,9 @@ function offline(req) {
 }
 
 function isModel(url) {
-  return url.hostname.includes('huggingface.co') || url.hostname.includes('hf.co') || url.pathname.includes('cdn-lfs');
+  const h = url.hostname;
+  return h === 'huggingface.co' || h.endsWith('.huggingface.co') || h === 'hf.co' || h.endsWith('.hf.co')
+    || url.pathname.includes('cdn-lfs');
 }
 
 function isCDN(url) {

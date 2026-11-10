@@ -33,6 +33,14 @@ async function init() {
   registerSW();
 
   app.settings = await DB.getAllSettings();
+  // Older builds saved a model id that has no ONNX weights; map it to a working repo.
+  if (app.settings.model) {
+    const fixed = AI.normalizeModelId(app.settings.model);
+    if (fixed !== app.settings.model) {
+      app.settings.model = fixed;
+      await DB.setSetting('model', fixed);
+    }
+  }
   setTheme(app.settings.theme || 'dark');
 
   app.convs = await DB.getConvs();
@@ -52,9 +60,9 @@ async function init() {
   await refreshSystemHealth();
 
   // Warm cached models only. Avoid blocking first-run users behind a large download overlay.
-  const modelId = app.settings.model || AI.DEFAULT_MODEL;
+  const modelId = AI.normalizeModelId(app.settings.model || AI.DEFAULT_MODEL);
   if (await AI.isCached(modelId)) {
-    loadModel(modelId, { showPanel: false }).catch(() => refreshModelBadge('error', modelId));
+    loadModel(modelId, { showPanel: false, skipConfirm: true }).catch(() => refreshModelBadge('error', modelId));
   } else {
     refreshModelBadge('', modelId);
   }
@@ -252,8 +260,9 @@ async function runGeneration(convId) {
   // Otherwise rapid sends can start parallel generations against one pipeline.
   app.generating = true;
 
-  if (!AI.isLoaded()) {
-    const modelId = app.settings.model || AI.DEFAULT_MODEL;
+  const wanted = AI.normalizeModelId(app.settings.model || AI.DEFAULT_MODEL);
+  if (!AI.isLoaded() || AI.getModelId() !== wanted) {
+    const modelId = wanted;
     try {
       await loadModel(modelId);
     } catch (err) {
@@ -294,6 +303,11 @@ async function runGeneration(convId) {
   try {
     const full = await AI.generate(msgs, opts, push, done);
     if (AI.isFallback()) refreshModelBadge('fallback', modelIdForGeneration());
+
+    if (!full || !full.trim()) {
+      el.remove();
+      return;
+    }
 
     const aiMsg = await DB.addMsg(convId, 'assistant', full);
     el.dataset.msgId = aiMsg.id;
@@ -366,8 +380,8 @@ function safeGenerationOptions(modelId, opts) {
   };
 }
 
-async function loadModel(id, { showPanel = true } = {}) {
-  const health = await ensureModelSafeToLoad(id);
+async function loadModel(id, { showPanel = true, skipConfirm = false } = {}) {
+  const health = await ensureModelSafeToLoad(id, { skipConfirm });
   refreshModelBadge('loading', id);
   if (showPanel) UI.setProgress({ status: 'initiate', modelName: health.modelName, downloadMB: health.downloadMB, health });
   await AI.loadModel(id, progress => {
@@ -518,7 +532,7 @@ async function refreshCacheChips() {
 
 
 async function refreshSystemHealth(modelId = app.settings.model || AI.DEFAULT_MODEL) {
-  const health = await AI.systemHealth(modelId);
+  const health = await AI.systemHealth(AI.normalizeModelId(modelId));
   app.lastHealth = health;
 
   const welcome = document.getElementById('welcome-system-health');
@@ -536,13 +550,16 @@ async function refreshSystemHealth(modelId = app.settings.model || AI.DEFAULT_MO
   return health;
 }
 
-async function ensureModelSafeToLoad(modelId) {
+async function ensureModelSafeToLoad(modelId, { skipConfirm = false } = {}) {
   const health = await refreshSystemHealth(modelId);
   if (!health.safe) {
     throw new Error(`Download blocked for device safety. ${health.issues.join(' ')}`);
   }
 
-  if (!health.recommended) {
+  // Only interrupt the user for a genuinely big first download; every non-8GB or
+  // non-WebGPU device used to get a scary dialog before even the 300MB model.
+  const needsConfirm = !health.cached && !skipConfirm && health.downloadMB >= 1000 && !health.recommended;
+  if (needsConfirm) {
     const notes = health.warnings.length ? `\n\nCaution:\n- ${health.warnings.join('\n- ')}` : '';
     const ok = await UI.confirmDlg(
       'Device Safety Check',

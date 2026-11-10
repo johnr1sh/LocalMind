@@ -72,7 +72,7 @@ A ChatGPT-style chat app that runs entirely in your browser. No API keys, no ser
 
 **Status:** Accepted
 
-**Decision:** Static assets → Cache First. HTML → Network First. Model weights → Cache First (own bucket). Transformers.js CDN → Cache First.
+**Decision:** Static assets → Cache First. HTML → Network First. Transformers.js CDN → Cache First. Model weights are **not** handled by the service worker; Transformers.js caches them itself in `transformers-cache` (caching them twice doubled disk use and buffered the whole download in RAM).
 
 **Why not precache model weights?** They're 360MB–2.3GB. Precaching at SW install time would fail on most devices and block SW activation. Lazy caching on first use is safer.
 
@@ -116,11 +116,14 @@ A ChatGPT-style chat app that runs entirely in your browser. No API keys, no ser
 
 ## Supported Models
 
-| Model | Size | Speed | Quality |
+| Model (Hugging Face repo) | Download | Runs on | Notes |
 |-------|------|-------|---------|
-| SmolLM2 360M Instruct | ~360MB | Fast | Good |
-| Qwen2.5 0.5B Instruct | ~500MB | Medium | Better |
-| Phi-3.5 Mini Instruct | ~2.3GB | Slow | Best |
+| `HuggingFaceTB/SmolLM2-360M-Instruct` | ~300MB (WebGPU q4f16) / ~420MB (CPU q4) | WebGPU or CPU | Default, safest |
+| `onnx-community/Qwen2.5-0.5B-Instruct` | ~485MB (WebGPU q4f16) / ~515MB (CPU q8) | WebGPU or CPU | Better quality |
+| `onnx-community/Phi-3.5-mini-instruct-onnx-web` | ~2.3GB (q4f16 only) | **WebGPU with shader-f16 only** | Largest; blocked on devices without it |
+
+> The official `Qwen/Qwen2.5-0.5B-Instruct` repo has no `onnx/` folder, so it can never load in
+> Transformers.js. Old saved settings pointing at it are migrated automatically.
 
 The app defaults to SmolLM2 360M — it's the best balance of speed and quality for browser inference. First-run downloads start when the user sends a message, so the welcome screen stays usable instead of blocking behind a large model transfer. If loading fails, Browser Helper mode provides diagnostics and recovery steps.
 
@@ -239,6 +242,13 @@ The export format is versioned (`"version": 1`) for forward compatibility.
 ---
 
 ## Troubleshooting
+
+**Model never finishes loading / "Browser Helper mode" right away**
+- Open DevTools → Network and look for a red `404` on `huggingface.co/.../onnx/model_*.onnx`.
+  That means the repo/dtype combo in `MODELS` (ai.js) has no such file.
+- Allow `cdn.jsdelivr.net`, `huggingface.co` and `*.hf.co` through any ad blocker/proxy.
+- Settings → Clear Model Cache, then retry. After updating from an older version, reload twice
+  so the new service worker takes over (it also deletes the old duplicate model cache).
 
 **Model download is slow or fails**
 - Check your internet connection
