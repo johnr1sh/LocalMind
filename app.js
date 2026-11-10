@@ -72,8 +72,13 @@ function supported() {
 
 function registerSW() {
   if (!('serviceWorker' in navigator)) return;
-  navigator.serviceWorker.register('./service-worker.js', { scope: './' })
+  navigator.serviceWorker.register('./service-worker.js', {
+    scope: './',
+    // Do not let the browser's HTTP cache hide a newly deployed worker script.
+    updateViaCache: 'none',
+  })
     .then(reg => {
+      reg.update().catch(err => console.warn('[SW] update check failed:', err));
       reg.addEventListener('updatefound', () => {
         reg.installing?.addEventListener('statechange', e => {
           if (e.target.state === 'installed' && navigator.serviceWorker.controller) {
