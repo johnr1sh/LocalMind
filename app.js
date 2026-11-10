@@ -104,8 +104,9 @@ function renderSidebar() {
 async function togglePinConv(id) {
   const conv = app.convs.find(item => item.id === id);
   if (!conv) return;
-  conv.pinned = !conv.pinned;
-  await DB.updateConv(id, { pinned: conv.pinned });
+  const pinned = !conv.pinned;
+  await DB.updateConv(id, { pinned });
+  conv.pinned = pinned;
   renderSidebar();
   UI.showOk(conv.pinned ? 'Conversation pinned.' : 'Conversation unpinned.');
 }
