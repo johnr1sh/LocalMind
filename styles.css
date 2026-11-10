@@ -1515,3 +1515,14 @@ body {
   .system-health-grid { grid-template-columns: 1fr; }
   .system-health { padding: 12px; }
 }
+
+/* Workspace additions */
+.quick-prompts{width:min(100%,560px);margin:22px auto 8px;text-align:left}
+.quick-prompts-label{margin:0 0 10px;color:var(--text-2);font-size:12px;font-weight:600;letter-spacing:.02em}
+.quick-prompts-list{display:flex;flex-wrap:wrap;gap:8px}
+.quick-prompt{border:1px solid var(--border-strong);border-radius:999px;background:var(--bg-2);color:var(--text-1);padding:9px 13px;min-height:36px;font:inherit;font-size:12px;cursor:pointer;transition:background var(--transition),border-color var(--transition),transform var(--transition)}
+.quick-prompt:hover{background:var(--bg-3);border-color:var(--accent)}
+.quick-prompt:active{transform:scale(.98)}
+.conv-item-btn.pin-btn{display:inline-flex;align-items:center;justify-content:center;font-size:15px;line-height:1}
+.conv-item-btn.pin-btn.pinned{color:var(--accent);opacity:1}
+@media(max-width:520px){.quick-prompts{margin-top:16px}.quick-prompt{padding:8px 11px}}

@@ -238,9 +238,8 @@ export function renderConvList(convs, activeId, handlers, query = '') {
   const el = document.getElementById('conversations-list');
   if (!el) return;
 
-  const filtered = query
-    ? convs.filter(c => c.title.toLowerCase().includes(query.toLowerCase()))
-    : convs;
+  // The controller already searches titles and message bodies; do not filter twice here.
+  const filtered = convs;
 
   if (!filtered.length) {
     el.innerHTML = `<div class="conversations-empty">${
@@ -249,28 +248,35 @@ export function renderConvList(convs, activeId, handlers, query = '') {
     return;
   }
 
+  const pinned = filtered.filter(conv => conv.pinned);
+  const recent = filtered.filter(conv => !conv.pinned);
+  el.innerHTML = '';
+  if (pinned.length) {
+    const group = document.createElement('div');
+    group.innerHTML = '<div class="conv-group-label">Pinned</div>';
+    for (const conv of pinned) group.appendChild(convItem(conv, conv.id === activeId, handlers));
+    el.appendChild(group);
+  }
   const now = Date.now();
   const DAY = 86400000;
   const groups = { Today: [], Yesterday: [], 'This Week': [], Older: [] };
-  for (const c of filtered) {
+  for (const c of recent) {
     const age = now - c.updatedAt;
-    if (age < DAY) groups['Today'].push(c);
-    else if (age < 2 * DAY) groups['Yesterday'].push(c);
+    if (age < DAY) groups.Today.push(c);
+    else if (age < 2 * DAY) groups.Yesterday.push(c);
     else if (age < 7 * DAY) groups['This Week'].push(c);
-    else groups['Older'].push(c);
+    else groups.Older.push(c);
   }
-
-  el.innerHTML = '';
   for (const [label, items] of Object.entries(groups)) {
     if (!items.length) continue;
-    const g = document.createElement('div');
-    g.innerHTML = `<div class="conv-group-label">${label}</div>`;
-    for (const c of items) g.appendChild(convItem(c, c.id === activeId, handlers));
-    el.appendChild(g);
+    const group = document.createElement('div');
+    group.innerHTML = `<div class="conv-group-label">${label}</div>`;
+    for (const c of items) group.appendChild(convItem(c, c.id === activeId, handlers));
+    el.appendChild(group);
   }
 }
 
-function convItem(conv, active, { onSelect, onRename, onDelete }) {
+function convItem(conv, active, { onSelect, onRename, onDelete, onTogglePin = () => {} }) {
   const item = document.createElement('div');
   item.className = `conv-item${active ? ' active' : ''}`;
   item.dataset.id = conv.id;
@@ -286,6 +292,7 @@ function convItem(conv, active, { onSelect, onRename, onDelete }) {
     </span>
     <span class="conv-item-name">${name}</span>
     <div class="conv-item-actions" role="group">
+      <button class="conv-item-btn pin-btn${conv.pinned ? ' pinned' : ''}" title="${conv.pinned ? 'Unpin' : 'Pin'}" aria-label="${conv.pinned ? 'Unpin conversation' : 'Pin conversation'}" aria-pressed="${Boolean(conv.pinned)}">★</button>
       <button class="conv-item-btn rename-btn" title="Rename" aria-label="Rename">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
@@ -296,6 +303,7 @@ function convItem(conv, active, { onSelect, onRename, onDelete }) {
 
   item.addEventListener('click', e => { if (!e.target.closest('.conv-item-btn')) onSelect(conv.id); });
   item.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.target.closest('.conv-item-btn')) onSelect(conv.id); });
+  item.querySelector('.pin-btn').addEventListener('click', e => { e.stopPropagation(); onTogglePin(conv.id); });
   item.querySelector('.rename-btn').addEventListener('click', e => { e.stopPropagation(); onRename(conv.id, conv.title); });
   item.querySelector('.delete-btn').addEventListener('click', e => { e.stopPropagation(); onDelete(conv.id, conv.title); });
 

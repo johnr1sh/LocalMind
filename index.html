@@ -66,7 +66,7 @@
         <circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="2"/>
         <path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
       </svg>
-      <input type="search" id="search-conversations" placeholder="Search conversations..." aria-label="Search conversations" />
+      <input type="search" id="search-conversations" placeholder="Search chats and messages..." aria-label="Search conversations" />
     </div>
 
     <nav id="conversations-list" class="conversations-list" aria-label="Conversation history">
@@ -164,6 +164,15 @@
           </div>
         </div>
 
+        <div class="quick-prompts" aria-label="Try a starter prompt">
+          <p class="quick-prompts-label">Start with something useful</p>
+          <div class="quick-prompts-list">
+            <button class="quick-prompt" type="button" data-prompt="Explain a difficult topic to me in simple terms, then give me a practical example.">Explain a topic</button>
+            <button class="quick-prompt" type="button" data-prompt="Help me write a clear, natural, well-structured message. Ask only if essential details are missing.">Write something</button>
+            <button class="quick-prompt" type="button" data-prompt="Review this code for bugs, edge cases, security issues, and performance. Explain fixes before changing anything.">Review my code</button>
+            <button class="quick-prompt" type="button" data-prompt="Brainstorm practical project ideas. Prioritize usefulness, simplicity, and features that can realistically work offline.">Brainstorm ideas</button>
+          </div>
+        </div>
         <button id="start-chat-btn" class="btn btn-primary btn-large">
           Start Chatting
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
@@ -183,6 +192,9 @@
         </button>
         <h2 id="chat-title" class="chat-title">New Conversation</h2>
         <div class="chat-header-actions">
+          <button id="export-current-chat-btn" class="chat-action-btn" aria-label="Export conversation as Markdown" title="Export as Markdown">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v3h16v-3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
           <button id="regenerate-btn" class="chat-action-btn hidden" aria-label="Regenerate last response" title="Regenerate">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path d="M23 4v6h-6M1 20v-6h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>

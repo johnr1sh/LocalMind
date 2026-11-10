@@ -9,9 +9,11 @@
  * a much faster install and no quota issues.
  */
 
-const VER = 'v1.2.0';
+const VER = 'v1.3.0';
 const STATIC = `lm-static-${VER}`;
-const MODELS = `lm-models-${VER}`;
+// Keep the model cache stable across app releases: model files are large and
+// should not be downloaded again just because the UI or controller changed.
+const MODELS = 'lm-models-v1.2.0';
 const RUNTIME = `lm-rt-${VER}`;
 const ALL = [STATIC, MODELS, RUNTIME];
 
@@ -41,7 +43,7 @@ self.addEventListener('activate', e => {
   e.waitUntil(
     Promise.all([
       caches.keys().then(keys =>
-        Promise.all(keys.filter(k => !ALL.includes(k)).map(k => caches.delete(k)))
+        Promise.all(keys.filter(k => !ALL.includes(k) && !k.startsWith('lm-models-')).map(k => caches.delete(k)))
       ),
       self.clients.claim(),
     ])
