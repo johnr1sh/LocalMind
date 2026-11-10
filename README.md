@@ -18,6 +18,10 @@ A ChatGPT-style chat app that runs entirely in your browser. No API keys, no ser
 - **Installable PWA** — works on Android, iOS, and desktop
 - **Import / export** — back up and restore conversations as JSON
 - **Dark and light themes** — with system preference detection
+- **Full-text local search** — find conversations by title or message content without sending data anywhere
+- **Pinned conversations** — keep important chats at the top of the sidebar
+- **Markdown chat export** — save an individual conversation as a portable `.md` file
+- **Quick-start prompts** — launch common writing, learning, coding, and brainstorming tasks
 - **Keyboard shortcuts** — `Ctrl+N` new chat, `Ctrl+K` search
 
 ---
