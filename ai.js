@@ -6,7 +6,7 @@
  * users are never trapped behind a failed model download.
  */
 
-import { pipeline, TextStreamer, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.1.2';
+import { pipeline, TextStreamer, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0';
 
 export const MODELS = {
   'HuggingFaceTB/SmolLM2-360M-Instruct': {
@@ -173,15 +173,34 @@ function normalizeProgress(update, modelId, attempt = {}) {
   };
 }
 
-function devicesForBrowser() {
-  const devices = [];
-  if ('gpu' in navigator) devices.push('webgpu');
-  devices.push('wasm');
-  return devices;
+async function hasUsableWebGPU() {
+  if (!navigator.gpu?.requestAdapter) return false;
+
+  let timeoutId;
+  try {
+    const adapter = await Promise.race([
+      navigator.gpu.requestAdapter(),
+      new Promise(resolve => {
+        timeoutId = setTimeout(() => resolve(null), 5000);
+      }),
+    ]);
+    return Boolean(adapter);
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
-function unique(list) {
-  return [...new Set(list.filter(Boolean))];
+async function loadingAttempts(cfg) {
+  const attempts = [];
+  if (await hasUsableWebGPU()) {
+    attempts.push({ device: 'webgpu', dtype: cfg.webgpuDtype || cfg.dtype });
+  }
+  // One predictable CPU/WASM fallback. Do not cycle through every quantization:
+  // each dtype is a different multi-hundred-megabyte download.
+  attempts.push({ device: 'wasm', dtype: cfg.wasmDtype || 'q4' });
+  return attempts;
 }
 
 function isMemoryAllocationError(err) {
@@ -218,7 +237,7 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
 
   if (loading && loadingPromise) {
     if (loadingModel === modelId) return loadingPromise;
-    throw new Error(`Already loading ${MODELS[loadingModel]?.name || loadingModel}. Please wait or cancel before switching models.`);
+    throw new Error(`Already loading ${MODELS[loadingModel]?.name || loadingModel}. Please wait before switching models.`);
   }
 
   const cfg = MODELS[modelId];
@@ -229,42 +248,80 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
   loadingModel = modelId;
   fallbackMode = false;
   lastError = null;
-  pipe = null;
-  loadedModel = null;
 
   loadingPromise = (async () => {
-    const attempts = [];
-    onProgress({ status: 'initiate', progress: 0, modelId, text: `Preparing ${cfg.name}…` });
+    const attempts = await loadingAttempts(cfg);
+    const failures = [];
 
-    for (const device of devicesForBrowser()) {
-      const dtypes = device === 'wasm'
-        ? unique([cfg.dtype, ...(cfg.fallbacks || []), 'q4', 'q4f16', 'q8'])
-        : unique([cfg.dtype, ...(cfg.fallbacks || [])]);
-      for (const dtype of dtypes) {
-        const attempt = { device, dtype };
-        attempts.push(attempt);
-        try {
-          onProgress({ status: 'initiate', progress: 0, modelId, device, dtype, text: `Loading ${cfg.name} with ${device.toUpperCase()} (${dtype})…` });
-          pipe = await pipeline('text-generation', modelId, {
-            dtype,
-            device,
-            progress_callback: update => onProgress(normalizeProgress(update, modelId, attempt)),
-          });
-          loadedModel = modelId;
-          fallbackMode = false;
-          onProgress({ status: 'ready', progress: 100, modelId, device, dtype, text: `${cfg.name} is ready.` });
-          return;
-        } catch (err) {
-          lastError = err;
-          console.warn(`[AI] ${modelId} failed on ${device}/${dtype}:`, err);
-          pipe = null;
-          loadedModel = null;
-          onProgress({ status: 'retry', progress: 0, modelId, device, dtype, text: `${device.toUpperCase()} ${dtype} failed. Trying another runtime…` });
+    onProgress({
+      status: 'initiate',
+      progress: 0,
+      modelId,
+      text: `Preparing ${cfg.name}. ${attempts.length} compatible runtime(s) available.`,
+    });
+
+    // Dispose the previous model before allocating another model's weights/session.
+    if (pipe?.dispose) {
+      try { await pipe.dispose(); } catch (err) {
+        console.warn('[AI] Previous model disposal failed:', err);
+      }
+    }
+    pipe = null;
+    loadedModel = null;
+
+    for (let index = 0; index < attempts.length; index += 1) {
+      const attempt = attempts[index];
+      try {
+        onProgress({
+          status: index ? 'retry' : 'initiate',
+          progress: 0,
+          modelId,
+          device: attempt.device,
+          dtype: attempt.dtype,
+          text: index
+            ? `GPU initialization was unavailable. Retrying once with CPU/WASM (${attempt.dtype}).`
+            : `Loading ${cfg.name} with ${attempt.device.toUpperCase()} (${attempt.dtype})…`,
+        });
+
+        const candidate = await pipeline('text-generation', modelId, {
+          dtype: attempt.dtype,
+          device: attempt.device,
+          progress_callback: update => onProgress(normalizeProgress(update, modelId, attempt)),
+        });
+
+        // Do not publish a half-created pipeline as ready.
+        if (typeof candidate !== 'function' || !candidate.tokenizer) {
+          throw new Error('The inference runtime returned an incomplete text-generation pipeline.');
         }
+
+        pipe = candidate;
+        loadedModel = modelId;
+        fallbackMode = false;
+        onProgress({
+          status: 'ready',
+          progress: 100,
+          modelId,
+          device: attempt.device,
+          dtype: attempt.dtype,
+          text: `${cfg.name} is ready.`,
+        });
+        return;
+      } catch (err) {
+        lastError = err;
+        failures.push({ ...attempt, message: err?.message || String(err) });
+        console.warn(`[AI] ${modelId} failed on ${attempt.device}/${attempt.dtype}:`, err);
+        pipe = null;
+        loadedModel = null;
       }
     }
 
-    throw friendlyLoadError(lastError, attempts);
+    const details = failures.map(item =>
+      `${item.device}/${item.dtype}: ${item.message}`
+    ).join(' | ');
+    throw friendlyLoadError(
+      new Error(details || 'No compatible inference runtime was available.'),
+      attempts,
+    );
   })();
 
   try {
