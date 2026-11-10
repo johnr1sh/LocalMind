@@ -44,7 +44,12 @@ export function md(text) {
     return `<ol>${items}</ol>`;
   });
 
-  h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, rawHref) => {
+    const href = safeMarkdownHref(rawHref.trim());
+    return href
+      ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer nofollow">${label}</a>`
+      : label;
+  });
 
   // paragraphs
   h = h.split(/\n{2,}/).map(p => {
@@ -53,6 +58,20 @@ export function md(text) {
   }).join('');
 
   return h;
+}
+
+function safeMarkdownHref(value) {
+  if (!value || /[\\u0000-\\u001f\\u007f]/.test(value)) return null;
+  if (value.startsWith('//')) return null;
+
+  try {
+    const parsed = new URL(value, document.baseURI);
+    if (!['http:', 'https:', 'mailto:'].includes(parsed.protocol)) return null;
+    if (parsed.protocol === 'mailto:' && !/^mailto:[^\\s@]+@[^\\s@]+$/i.test(value)) return null;
+    return value;
+  } catch {
+    return null;
+  }
 }
 
 function esc(t) {
