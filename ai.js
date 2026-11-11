@@ -562,8 +562,8 @@ export function getRuntime() { return loadedRuntime; }
 export function isLoading() { return loading; }
 export function getLoadingModelId() { return loadingModel; }
 export function getLastError() { return lastError; }
-export function resetModel() {
-  disposePipe();
+export async function resetModel() {
+  await disposePipe();
   loading = false;
   loadingModel = null;
   loadingPromise = null;
