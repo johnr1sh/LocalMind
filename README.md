@@ -13,7 +13,7 @@ A ChatGPT-style hybrid online/offline app that runs AI models locally in your br
 - **No account required** — zero sign-ups, rate limits, or subscriptions
 - **Persistent chat history** — stored in IndexedDB, survives page refreshes
 - **Resilient model setup** — shared downloads, WebGPU→WASM fallback, dtype fallback, and clear progress diagnostics
-- **Browser Helper mode** — if the model cannot download, LocalMind can still explain browser/storage/WebGPU status and recovery steps
+- **Browser diagnostics** — send `/browser` to inspect storage, WebGPU, WASM, network, and device capabilities
 - **Multi-model library** — SmolLM2 135M and 360M, Qwen2.5 0.5B and 1.5B, Phi-3.5 Mini; download, activate, and remove models independently
 - **Streaming responses** — real-time token output
 - **Markdown rendering** — code blocks, lists, bold, italic, links
@@ -256,7 +256,7 @@ The export format is versioned (`"version": 1`) for forward compatibility.
 
 ## Troubleshooting
 
-**Model never finishes loading / "Browser Helper mode" right away**
+**Model never finishes loading / local AI is unavailable**
 - Open DevTools → Network and look for a red `404` on `huggingface.co/.../onnx/model_*.onnx`.
   That means the repo/dtype combo in `MODELS` (ai.js) has no such file.
 - Allow `cdn.jsdelivr.net`, `huggingface.co` and `*.hf.co` through any ad blocker/proxy.
