@@ -282,15 +282,17 @@
       </section>
 
       <section class="settings-section">
-        <h3 class="settings-section-title">Model</h3>
+        <h3 class="settings-section-title">Model Library</h3>
         <div class="form-group">
           <label for="model-select" class="form-label">Active Model</label>
           <select id="model-select" class="form-select" aria-describedby="model-hint">
-            <option value="HuggingFaceTB/SmolLM2-360M-Instruct">SmolLM2 360M (Safest, ~300–420MB)</option>
-            <option value="onnx-community/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B (~490–515MB)</option>
-            <option value="onnx-community/Phi-3.5-mini-instruct-onnx-web">Phi-3.5 Mini (WebGPU only, ~2.3GB)</option>
+            <option value="onnx-community/SmolLM2-135M-Instruct-ONNX">SmolLM2 135M · Ultra-light · 117–181MB</option>
+            <option value="HuggingFaceTB/SmolLM2-360M-Instruct">SmolLM2 360M · Balanced · 273–388MB</option>
+            <option value="onnx-community/Qwen2.5-0.5B-Instruct">Qwen2.5 0.5B · Multilingual · 483–786MB</option>
+            <option value="onnx-community/Qwen2.5-1.5B-Instruct">Qwen2.5 1.5B · Higher quality · 1.22–1.79GB</option>
+            <option value="onnx-community/Phi-3.5-mini-instruct-onnx-web">Phi-3.5 Mini · Advanced · ~2.3GB · WebGPU only</option>
           </select>
-          <p id="model-hint" class="form-hint">Start with SmolLM2 360M. LocalMind checks free browser storage and memory before downloading.</p>
+          <p id="model-hint" class="form-hint">Choose a lightweight model to start. Download multiple models once and switch between them; only the active model stays in memory. Downloads require internet, while completed models can run offline.</p>
         </div>
         <div id="settings-system-health" class="system-health" aria-live="polite"></div>
         <button id="retry-model-btn" class="btn btn-ghost" type="button">Retry Model Load</button>
