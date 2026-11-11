@@ -5,59 +5,116 @@
  */
 
 // ---- markdown ----
+//
+// Code (fenced and inline) and links are lifted out into a stash BEFORE any other
+// rule runs, then restored at the end. Otherwise the emphasis/heading/list rules
+// rewrite the inside of code blocks (`**kwargs`, `__init__`, `# comment`, `- item`)
+// and the italic rule corrupts the encoded `data-code` attribute of the Copy button.
+
+const BLOCK_MARK = '\u0001';
+const INLINE_MARK = '\u0000';
 
 export function md(text) {
-  let h = esc(text);
+  const stash = [];
+  const keep = (html, mark) => `${mark}${stash.push(html) - 1}${mark}`;
 
-  // fenced code blocks
-  h = h.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const raw = code.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-    const hi = highlight(raw, lang);
-    return `<div class="code-block-wrap">
+  let src = String(text ?? '').replace(/[\u0000\u0001]/g, '');
+
+  // Closed fenced blocks, then one unterminated fence (a response that is still streaming).
+  src = src.replace(/```([\w+#.-]*)[^\S\n]*\n?([\s\S]*?)```/g,
+    (_, lang, code) => `\n${keep(codeBlock(lang, code), BLOCK_MARK)}\n`);
+  src = src.replace(/```([\w+#.-]*)[^\S\n]*\n?([\s\S]*)$/,
+    (_, lang, code) => `\n${keep(codeBlock(lang, code), BLOCK_MARK)}\n`);
+
+  src = src.replace(/`([^`\n]+)`/g, (_, code) => keep(`<code>${esc(code)}</code>`, INLINE_MARK));
+
+  const lines = esc(src).split('\n');
+  const out = [];
+  let para = [];
+  let list = null;
+
+  const flushPara = () => {
+    if (para.length) out.push(`<p>${para.map(l => inline(l, stash, keep)).join('<br>')}</p>`);
+    para = [];
+  };
+  const flushList = () => {
+    if (list) {
+      out.push(`<${list.type}>${list.items.map(i => `<li>${inline(i, stash, keep)}</li>`).join('')}</${list.type}>`);
+    }
+    list = null;
+  };
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (!line.trim()) { flushPara(); flushList(); continue; }
+
+    let m;
+    if (new RegExp(`^${BLOCK_MARK}\\d+${BLOCK_MARK}$`).test(line.trim())) {
+      flushPara(); flushList(); out.push(line.trim());
+    } else if ((m = line.match(/^(#{1,6}) +(.+)$/))) {
+      flushPara(); flushList();
+      out.push(`<h${m[1].length}>${inline(m[2], stash, keep)}</h${m[1].length}>`);
+    } else if (/^ {0,3}([-*_])( *\1){2,}$/.test(line)) {
+      flushPara(); flushList(); out.push('<hr>');
+    } else if ((m = line.match(/^&gt; ?(.*)$/))) {
+      flushPara(); flushList();
+      out.push(`<blockquote>${inline(m[1], stash, keep)}</blockquote>`);
+    } else if ((m = line.match(/^\s*[-*+] +(.+)$/))) {
+      flushPara();
+      if (list && list.type !== 'ul') flushList();
+      (list ||= { type: 'ul', items: [] }).items.push(m[1]);
+    } else if ((m = line.match(/^\s*\d+[.)] +(.+)$/))) {
+      flushPara();
+      if (list && list.type !== 'ol') flushList();
+      (list ||= { type: 'ol', items: [] }).items.push(m[1]);
+    } else {
+      flushList();
+      para.push(line);
+    }
+  }
+  flushPara();
+  flushList();
+
+  // Restore stashed HTML; links can contain inline-code placeholders, so loop.
+  let html = out.join('');
+  const marker = /[\u0000\u0001](\d+)[\u0000\u0001]/g;
+  for (let pass = 0; pass < 4 && marker.test(html); pass += 1) {
+    marker.lastIndex = 0;
+    html = html.replace(marker, (_, i) => stash[Number(i)] ?? '');
+  }
+  return html;
+}
+
+function inline(s, stash, keep) {
+  // Links first, so `_`/`*` inside a URL can never be treated as emphasis.
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, rawHref) => {
+    const href = safeMarkdownHref(unesc(rawHref.trim()));
+    const text = emphasis(label);
+    return keep(href
+      ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer nofollow">${text}</a>`
+      : text, INLINE_MARK);
+  });
+  return emphasis(s);
+}
+
+function emphasis(s) {
+  return s
+    .replace(/\*\*\*(?=\S)(.+?)(?<=\S)\*\*\*/g, '<strong><em>$1</em></strong>')
+    .replace(/\*\*(?=\S)(.+?)(?<=\S)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*\w])\*(?=[^*\s])([^*\n]*?[^*\s])\*(?![*\w])/g, '$1<em>$2</em>')
+    .replace(/(^|[^\w])_(?=[^_\s])([^_\n]*?[^_\s])_(?!\w)/g, '$1<em>$2</em>');
+}
+
+function codeBlock(lang, code) {
+  const label = lang || 'text';
+  const raw = code.replace(/\n$/, '');
+  return `<div class="code-block-wrap">
       <div class="code-block-header">
-        <span class="code-lang">${esc(lang || 'text')}</span>
-        <button class="code-copy" data-code="${encodeURIComponent(raw)}">Copy</button>
+        <span class="code-lang">${esc(label)}</span>
+        <button class="code-copy" data-code="${esc(encodeURIComponent(raw))}">Copy</button>
       </div>
-      <pre><code>${hi}</code></pre>
+      <pre><code>${highlight(raw, label.toLowerCase())}</code></pre>
     </div>`;
-  });
-
-  h = h.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-  h = h.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  h = h.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  h = h.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-  h = h.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-  h = h.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  h = h.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  h = h.replace(/_(.+?)_/g, '<em>$1</em>');
-  h = h.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
-
-  // lists
-  h = h.replace(/(^[-*] .+\n?)+/gm, block => {
-    const items = block.trim().split('\n').filter(Boolean)
-      .map(l => `<li>${l.replace(/^[-*] /, '')}</li>`).join('');
-    return `<ul>${items}</ul>`;
-  });
-  h = h.replace(/(^\d+\. .+\n?)+/gm, block => {
-    const items = block.trim().split('\n').filter(Boolean)
-      .map(l => `<li>${l.replace(/^\d+\. /, '')}</li>`).join('');
-    return `<ol>${items}</ol>`;
-  });
-
-  h = h.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, rawHref) => {
-    const href = safeMarkdownHref(rawHref.trim());
-    return href
-      ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer nofollow">${label}</a>`
-      : label;
-  });
-
-  // paragraphs
-  h = h.split(/\n{2,}/).map(p => {
-    if (/^<(h[1-6]|ul|ol|blockquote|div)/.test(p)) return p;
-    return `<p>${p.replace(/\n/g, '<br>')}</p>`;
-  }).join('');
-
-  return h;
 }
 
 function safeMarkdownHref(value) {
@@ -75,21 +132,46 @@ function safeMarkdownHref(value) {
 }
 
 function esc(t) {
-  return t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
-function highlight(code, lang) {
-  const supported = ['js', 'javascript', 'ts', 'typescript', 'python', 'py', 'html', 'css', 'json', 'bash', 'sh'];
-  if (!supported.includes(lang)) return esc(code);
+function unesc(t) {
+  return t.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+}
 
-  let out = esc(code);
-  out = out.replace(/(\/\/.*?$|#.*?$)/gm, '<span style="color:#8b949e">$1</span>');
-  out = out.replace(/(&quot;.*?&quot;|&#39;.*?&#39;|`.*?`)/g, '<span style="color:#a5d6ff">$1</span>');
-  const kws = 'const|let|var|function|return|if|else|for|while|class|import|export|from|async|await|new|this|true|false|null|undefined|def|print|in|not|and|or|is|pass|break|continue|yield|try|catch|throw|typeof|instanceof';
-  out = out.replace(new RegExp(`\\b(${kws})\\b`, 'g'), '<span style="color:#ff7b72">$1</span>');
-  out = out.replace(/\b(\d+\.?\d*)\b/g, '<span style="color:#79c0ff">$1</span>');
-  return out;
+// Highlighting runs on the RAW code in a single tokenizing pass and escapes every
+// piece itself. (The old version highlighted already-escaped text, so the `#` in
+// `&#39;` turned the rest of any line containing an apostrophe into a "comment".)
+const KEYWORDS = 'const|let|var|function|return|if|else|for|while|class|import|export|from|async|await|new|this|true|false|null|undefined|def|print|in|not|and|or|is|pass|break|continue|yield|try|catch|throw|typeof|instanceof|None|True|False|elif|except|with|as|lambda|self|echo|fi|then|do|done';
+const LANGS = {
+  js: 'c', javascript: 'c', ts: 'c', typescript: 'c',
+  python: 'hash', py: 'hash', bash: 'hash', sh: 'hash',
+  html: 'plain', css: 'plain', json: 'plain',
+};
+const TOKENS = {
+  c: new RegExp(`(\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/)|("(?:\\\\.|[^"\\\\\\n])*"|'(?:\\\\.|[^'\\\\\\n])*'|\`(?:\\\\.|[^\`\\\\])*\`)|\\b(${KEYWORDS})\\b|\\b(\\d+(?:\\.\\d+)?)\\b`, 'g'),
+  hash: new RegExp(`(#[^\\n]*)|("(?:\\\\.|[^"\\\\\\n])*"|'(?:\\\\.|[^'\\\\\\n])*')|\\b(${KEYWORDS})\\b|\\b(\\d+(?:\\.\\d+)?)\\b`, 'g'),
+  plain: new RegExp(`(\\/\\*[\\s\\S]*?\\*\\/)|("(?:\\\\.|[^"\\\\\\n])*"|'(?:\\\\.|[^'\\\\\\n])*')|\\b(true|false|null)\\b|\\b(\\d+(?:\\.\\d+)?)\\b`, 'g'),
+};
+const COLORS = ['#8b949e', '#a5d6ff', '#ff7b72', '#79c0ff'];
+
+function highlight(code, lang) {
+  const kind = LANGS[lang];
+  if (!kind) return esc(code);
+
+  const re = TOKENS[kind];
+  re.lastIndex = 0;
+  let out = '';
+  let last = 0;
+  for (const m of code.matchAll(re)) {
+    out += esc(code.slice(last, m.index));
+    const group = m.findIndex((v, i) => i > 0 && v !== undefined) - 1;
+    out += `<span style="color:${COLORS[group]}">${esc(m[0])}</span>`;
+    last = m.index + m[0].length;
+  }
+  return out + esc(code.slice(last));
 }
 
 function ts(time) {
@@ -183,19 +265,29 @@ export function streamingEl(id) {
   row.appendChild(wrap);
 
   let buf = '';
+  let frame = 0;
+  let finished = false;
+  copyBtn.addEventListener('click', () => copyText(buf, copyBtn));
+
+  // Re-parsing the whole reply on every token is quadratic; paint at most once per frame.
+  const paint = () => {
+    frame = 0;
+    bubble.innerHTML = md(buf) + '<span class="cursor" aria-hidden="true">▋</span>';
+    bindCodeCopy(bubble);
+  };
 
   return {
     el: row,
     push(chunk) {
       buf += chunk;
-      bubble.innerHTML = md(buf) + '<span class="cursor" aria-hidden="true">▋</span>';
-      bindCodeCopy(bubble);
+      if (!frame && !finished) frame = requestAnimationFrame(paint);
     },
     done(full) {
+      finished = true;
+      if (frame) { cancelAnimationFrame(frame); frame = 0; }
       buf = full;
       bubble.innerHTML = md(full);
       bindCodeCopy(bubble);
-      copyBtn.addEventListener('click', () => copyText(full, copyBtn));
     },
   };
 }
@@ -222,10 +314,14 @@ async function copyText(text, btn, label = 'Copied') {
     document.execCommand('copy');
     document.body.removeChild(ta);
   }
-  const orig = btn.innerHTML;
+  if (btn.dataset.origHtml === undefined) btn.dataset.origHtml = btn.innerHTML;
   btn.textContent = label;
   btn.classList.add('copied');
-  setTimeout(() => { btn.innerHTML = orig; btn.classList.remove('copied'); }, 2000);
+  clearTimeout(Number(btn.dataset.copyTimer));
+  btn.dataset.copyTimer = String(setTimeout(() => {
+    btn.innerHTML = btn.dataset.origHtml;
+    btn.classList.remove('copied');
+  }, 2000));
 }
 
 function copyIcon() {
@@ -239,7 +335,7 @@ export function renderConvList(convs, activeId, handlers, query = '') {
   if (!el) return;
 
   // The controller already searches titles and message bodies; do not filter twice here.
-  const filtered = convs;
+  const filtered = [...convs].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
 
   if (!filtered.length) {
     el.innerHTML = `<div class="conversations-empty">${
@@ -347,7 +443,14 @@ export function showModal(id) {
   }, 80);
 }
 
+// Pending dialog promises, keyed by modal id. Hiding a dialog by any route (Escape,
+// backdrop, close button) cancels it, so its listeners never linger and later fire
+// a stale confirm (which could delete a conversation the user had backed out of).
+const dialogCancel = new Map();
+
 export function hideModal(id) {
+  const cancel = dialogCancel.get(id);
+  if (cancel) { dialogCancel.delete(id); cancel(); }
   document.getElementById(id)?.classList.add('hidden');
 }
 
@@ -358,12 +461,16 @@ export function promptRename(current) {
     const cancel = document.getElementById('rename-cancel-btn');
     const close = document.getElementById('rename-close-btn');
 
+    dialogCancel.get('rename-modal')?.();
     input.value = current;
     showModal('rename-modal');
     input.select();
 
+    const backdrop = document.getElementById('rename-backdrop');
     const cleanup = () => {
+      dialogCancel.delete('rename-modal');
       hideModal('rename-modal');
+      backdrop?.removeEventListener('click', dismiss);
       ok.removeEventListener('click', confirm);
       cancel.removeEventListener('click', dismiss);
       close.removeEventListener('click', dismiss);
@@ -377,12 +484,15 @@ export function promptRename(current) {
     ok.addEventListener('click', confirm);
     cancel.addEventListener('click', dismiss);
     close.addEventListener('click', dismiss);
+    backdrop?.addEventListener('click', dismiss);
     input.addEventListener('keydown', keydown);
+    dialogCancel.set('rename-modal', dismiss);
   });
 }
 
 export function confirmDlg(title, msg, okLabel = 'Delete') {
   return new Promise(res => {
+    dialogCancel.get('confirm-modal')?.();
     document.getElementById('confirm-title').textContent = title;
     document.getElementById('confirm-message').textContent = msg;
     document.getElementById('confirm-ok-btn').textContent = okLabel;
@@ -393,6 +503,7 @@ export function confirmDlg(title, msg, okLabel = 'Delete') {
     const backdrop = document.getElementById('confirm-backdrop');
 
     const cleanup = () => {
+      dialogCancel.delete('confirm-modal');
       hideModal('confirm-modal');
       ok.removeEventListener('click', yes);
       cancel.removeEventListener('click', no);
@@ -405,6 +516,7 @@ export function confirmDlg(title, msg, okLabel = 'Delete') {
     ok.addEventListener('click', yes);
     cancel.addEventListener('click', no);
     backdrop.addEventListener('click', no);
+    dialogCancel.set('confirm-modal', no);
   });
 }
 

@@ -13,7 +13,8 @@
 // Load the heavy inference runtime only after the service worker controls the page.
 // A static CDN import runs before app.js can register the worker and breaks reliable
 // offline startup on a fresh install.
-const RUNTIME_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0';
+export const TRANSFORMERS_VERSION = '4.3.2';
+const RUNTIME_URL = `https://cdn.jsdelivr.net/npm/@huggingface/transformers@${TRANSFORMERS_VERSION}`;
 let runtimePromise = null;
 let pipeline = null;
 let TextStreamer = null;
@@ -384,7 +385,7 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
   modelId = normalizeModelId(modelId);
 
   if (loadedModel === modelId && pipe) {
-      onProgress({ status: 'ready', progress: 100, modelId });
+    onProgress({ status: 'ready', progress: 100, modelId });
     return;
   }
 
@@ -481,7 +482,7 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
           device: attempt.device,
           dtype: attempt.dtype,
           text: index
-            ? `GPU initialization failed. Retrying with CPU/WASM (${attempt.dtype}).`
+            ? `The previous runtime failed. Retrying with ${attempt.device.toUpperCase()} (${attempt.dtype}).`
             : `Loading ${cfg.name} with ${attempt.device.toUpperCase()} (${attempt.dtype})…`,
         });
 
@@ -518,7 +519,7 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
         pipe = candidate;
         loadedModel = modelId;
         loadedRuntime = attempt;
-          onProgress({
+        onProgress({
           status: 'ready',
           progress: 100,
           modelId,
@@ -552,6 +553,24 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
   }
 }
 
+/**
+ * Transformers.js throws if do_sample is true with temperature <= 0 (the Settings
+ * slider allows 0). Treat 0 as "deterministic" and drop NaN/invalid values so a
+ * bad setting can never break generation.
+ */
+function sanitizeGeneration(settings = {}) {
+  const out = { ...settings };
+  for (const key of ['temperature', 'top_p', 'max_new_tokens', 'repetition_penalty']) {
+    if (key in out && !Number.isFinite(out[key])) delete out[key];
+  }
+  if ('temperature' in out && out.temperature <= 0) {
+    delete out.temperature;
+    out.do_sample = false;
+  }
+  if ('top_p' in out) out.top_p = Math.min(1, Math.max(0.01, out.top_p));
+  return out;
+}
+
 export async function generate(msgs, settings = {}, onToken = () => {}, onDone = () => {}) {
   stopFlag = false;
 
@@ -575,7 +594,7 @@ export async function generate(msgs, settings = {}, onToken = () => {}, onDone =
 
   const opts = {
     ...DEFAULT_GEN,
-    ...settings,
+    ...sanitizeGeneration(settings),
     streamer,
     stopping_criteria: stopper,
     return_full_text: false,
@@ -671,7 +690,8 @@ export async function isCached(modelId) {
 
 export async function clearModelCache(modelId) {
   modelId = normalizeModelId(modelId);
-  if (loadedModel === modelId) await disposePipe();
+  const wasLoaded = loadedModel === modelId;
+  if (wasLoaded) await disposePipe();
   await ensureRuntime();
   const cfg = MODELS[modelId];
   const dtypes = new Set([
@@ -686,7 +706,7 @@ export async function clearModelCache(modelId) {
       console.warn(`[AI] clear_cache failed for ${modelId}/${dtype}:`, err);
     }
   }
-  loadedRuntime = null;
+  if (wasLoaded) loadedRuntime = null;
 
   return deleted;
 }

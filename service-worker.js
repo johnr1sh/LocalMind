@@ -9,13 +9,16 @@
 const VER = new URL(self.location.href).searchParams.get('v') || 'local';
 const CACHE_VERSION = VER.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48) || 'local';
 const STATIC = `lm-static-${CACHE_VERSION}`;
-// The Transformers.js version is pinned in ai.js, so keep its runtime cache
-// stable across app deployments. Otherwise every update would delete the only
-// offline copy of ONNX Runtime/WASM before the next page load can reuse it.
-const RUNTIME = 'lm-runtime-transformers-4-3-0';
+// The Transformers.js version is pinned in ai.js (TRANSFORMERS_VERSION), so keep its
+// runtime cache stable across app deployments. Otherwise every update would delete
+// the only offline copy of ONNX Runtime/WASM before the next page load can reuse it.
+// Keep this name in sync with ai.js (scripts/verify-model-library.mjs checks it).
+const RUNTIME_PREFIX = 'lm-runtime-';
+const RUNTIME = `${RUNTIME_PREFIX}transformers-4-3-2`;
+// './index.html' is deliberately absent: with cleanUrls it redirects to './', and a
+// redirected response must not be served back for a navigation request.
 const PRECACHE = [
   './',
-  './index.html',
   './styles.css',
   './app.js',
   './ai.js',
@@ -29,7 +32,9 @@ const PRECACHE = [
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const cache = await caches.open(STATIC);
-    await cache.addAll(PRECACHE);
+    // `reload` bypasses the HTTP cache so a host that sends max-age (GitHub Pages)
+    // cannot leave this version's cache holding files from the previous deployment.
+    await cache.addAll(PRECACHE.map(url => new Request(url, { cache: 'reload' })));
     await self.skipWaiting();
   })());
 });
@@ -37,11 +42,32 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {
     const keys = await caches.keys();
-    // Keep the Transformers.js cache intact; only retire LocalMind's old app caches.
+
+    // After a Transformers.js version bump, carry over the files that do not change
+    // with it (ONNX Runtime / WASM helpers) so a device that updates and then goes
+    // offline can still start a model. Only the old Transformers bundle is dropped.
+    const oldRuntimes = keys.filter(key => key.startsWith(RUNTIME_PREFIX) && key !== RUNTIME);
+    if (oldRuntimes.length) {
+      const next = await caches.open(RUNTIME);
+      for (const name of oldRuntimes) {
+        try {
+          const old = await caches.open(name);
+          for (const request of await old.keys()) {
+            if (request.url.includes('/@huggingface/transformers@')) continue;
+            if (await next.match(request)) continue;
+            const response = await old.match(request);
+            if (response) await next.put(request, response).catch(() => {});
+          }
+        } catch { /* a cache that cannot be read is simply rebuilt online */ }
+      }
+    }
+
+    // Keep the Transformers.js model cache intact; only retire LocalMind's own caches.
     await Promise.all(keys
       .filter(key => (
         (key.startsWith('lm-static-') && key !== STATIC)
         || (key.startsWith('lm-rt-') && key !== RUNTIME)
+        || oldRuntimes.includes(key)
         || key.startsWith('lm-models-')
       ))
       .map(key => caches.delete(key)));
@@ -89,7 +115,8 @@ async function cacheFirst(request, cacheName) {
 async function networkFirst(request, cacheName) {
   try {
     const response = await fetch(request, { cache: 'no-store' });
-    if (response.ok) {
+    // Never cache a redirected response: it cannot be served back for a navigation.
+    if (response.ok && !response.redirected) {
       const cache = await caches.open(cacheName);
       await cache.put(request, response.clone()).catch(() => {});
     }
@@ -97,7 +124,7 @@ async function networkFirst(request, cacheName) {
   } catch {
     const cache = await caches.open(cacheName);
     return (await cache.match(request))
-      || (await cache.match('./index.html'))
+      || (await cache.match('./'))
       || offline(request);
   }
 }

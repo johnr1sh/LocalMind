@@ -33,26 +33,12 @@ async function init() {
     return;
   }
 
-  await registerSW();
-  // Wait until the newly installed worker actually controls this document before
-  // importing the CDN-hosted inference runtime or checking model caches.
-  if ('serviceWorker' in navigator) {
-    try {
-      await Promise.race([
-        navigator.serviceWorker.ready,
-        new Promise(resolve => setTimeout(resolve, 2500)),
-      ]);
-      if (!navigator.serviceWorker.controller) {
-        await new Promise(resolve => {
-          const done = () => { clearTimeout(timeout); resolve(); };
-          const timeout = setTimeout(done, 3000);
-          navigator.serviceWorker.addEventListener('controllerchange', done, { once: true });
-        });
-      }
-    } catch (err) {
-      console.warn('[SW] control wait failed; online inference can still proceed:', err);
-    }
-  }
+  // Register the worker in the background. The first paint (chat history, settings)
+  // must never wait on a slow deployment-version request or the worker handshake;
+  // only the CDN inference runtime has to wait for worker control (see swReady below).
+  swReady = registerSW()
+    .then(waitForServiceWorkerControl)
+    .catch(err => console.warn('[SW] setup failed; online inference can still proceed:', err));
 
   app.settings = await DB.getAllSettings();
   // Older builds saved a model id that has no ONNX weights; map it to a working repo.
@@ -88,6 +74,10 @@ async function init() {
   }
 
   renderSidebar();
+
+  // Everything below touches the Transformers.js runtime (cache checks, health),
+  // which is imported from the CDN, so the service worker must control the page first.
+  await swReady;
   syncSettingsUI();
   refreshModelBadge();
   await refreshSystemHealth();
@@ -98,6 +88,29 @@ async function init() {
     loadModel(modelId, { showPanel: false, skipConfirm: true }).catch(() => refreshModelBadge('error', modelId));
   } else {
     refreshModelBadge('', modelId);
+  }
+}
+
+// Resolves once the page's service worker setup finished (or timed out). Model and
+// runtime work awaits this so the CDN runtime is fetched through the worker's cache.
+let swReady = Promise.resolve();
+
+async function waitForServiceWorkerControl() {
+  if (!('serviceWorker' in navigator)) return;
+  try {
+    await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise(resolve => setTimeout(resolve, 2500)),
+    ]);
+    if (!navigator.serviceWorker.controller) {
+      await new Promise(resolve => {
+        const done = () => { clearTimeout(timeout); resolve(); };
+        const timeout = setTimeout(done, 3000);
+        navigator.serviceWorker.addEventListener('controllerchange', done, { once: true });
+      });
+    }
+  } catch (err) {
+    console.warn('[SW] control wait failed; online inference can still proceed:', err);
   }
 }
 
@@ -219,6 +232,8 @@ function updateConnectivityUI() {
   }
 }
 
+const boundRegistrations = new WeakSet();
+
 async function registerWorkerForVersion(commit = null) {
   if (!('serviceWorker' in navigator)) return null;
   const workerUrl = commit
@@ -229,6 +244,8 @@ async function registerWorkerForVersion(commit = null) {
     updateViaCache: 'none',
   });
   swRegistration = registration;
+  if (boundRegistrations.has(registration)) return registration;
+  boundRegistrations.add(registration);
   registration.addEventListener('updatefound', () => {
     const installing = registration.installing;
     installing?.addEventListener('statechange', () => {
@@ -403,7 +420,7 @@ async function togglePinConv(id) {
   const conv = app.convs.find(item => item.id === id);
   if (!conv) return;
   const pinned = !conv.pinned;
-  await DB.updateConv(id, { pinned });
+  await DB.updateConv(id, { pinned }, { touch: false });
   conv.pinned = pinned;
   renderSidebar();
   UI.showOk(conv.pinned ? 'Conversation pinned.' : 'Conversation unpinned.');
@@ -462,7 +479,7 @@ async function newConv() {
 async function renameConv(id, current) {
   const name = await UI.promptRename(current);
   if (!name || name === current) return;
-  await DB.updateConv(id, { title: name });
+  await DB.updateConv(id, { title: name }, { touch: false });
   const c = app.convs.find(c => c.id === id);
   if (c) c.title = name;
   if (app.activeId === id) document.getElementById('chat-title').textContent = name;
@@ -513,7 +530,8 @@ async function send(text) {
 
   // auto-title on first message
   if (conv?.title === 'New Conversation') {
-    const title = text.trim().slice(0, 50) + (text.length > 50 ? '…' : '');
+    const clean = text.trim();
+    const title = clean.slice(0, 50) + (clean.length > 50 ? '…' : '');
     await DB.updateConv(id, { title });
     conv.title = title;
     document.getElementById('chat-title').textContent = title;
@@ -609,7 +627,7 @@ async function runGeneration(convId) {
   } catch (err) {
     document.getElementById('typing-indicator').classList.add('hidden');
     el.remove();
-    if (AI.isLikelyMemoryError(err)) AI.resetModel();
+    if (AI.isLikelyMemoryError(err)) await AI.resetModel();
     refreshModelBadge('error', modelIdForGeneration());
     UI.showErr(`Generation failed. No simulated response was saved. ${err.message}`);
     console.error(err);
@@ -681,6 +699,7 @@ async function loadModel(id, { showPanel = true, skipConfirm = false } = {}) {
   app.modelOperation = true;
   app.modelOperationId = id;
   const operation = (async () => {
+    await swReady;
     const health = await ensureModelSafeToLoad(id, { skipConfirm });
     refreshModelBadge('loading', id);
     if (showPanel) UI.setProgress({ status: 'initiate', modelName: health.modelName, downloadMB: health.downloadMB, health });
@@ -971,7 +990,7 @@ async function exportChats() {
       download: `localmind-${new Date().toISOString().slice(0, 10)}.json`,
     });
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
     UI.showOk('Exported.');
   } catch (err) {
     UI.showErr(`Export failed: ${err.message}`);
@@ -983,6 +1002,11 @@ async function importChats(file) {
     const raw = await file.text();
     await DB.importData(JSON.parse(raw));
     app.convs = await DB.getConvs();
+    app.settings = await DB.getAllSettings();
+    if (app.settings.model) app.settings.model = AI.normalizeModelId(app.settings.model);
+    setTheme(app.settings.theme || 'dark');
+    syncSettingsUI();
+    refreshModelBadge();
     renderSidebar();
     UI.showOk('Imported.');
   } catch (err) {
@@ -1017,6 +1041,7 @@ function bindAll() {
   document.addEventListener('click', e => {
     const sidebar = $('sidebar');
     const toggle = $('sidebar-toggle');
+    if (!e.target.isConnected) return; // a button the click just re-rendered (pin, rename)
     if (sidebar.classList.contains('open') && !sidebar.contains(e.target) && !toggle.contains(e.target)) {
       closeSidebar();
     }
@@ -1070,7 +1095,7 @@ function bindAll() {
     button.disabled = true;
     button.textContent = 'Retrying…';
     try {
-      AI.resetModel();
+      await AI.resetModel();
       await loadModel(modelId, { showPanel: true, skipConfirm: false });
       UI.showOk(`${AI.MODELS[modelId]?.name || 'Model'} loaded successfully.`);
       await refreshCacheChips();

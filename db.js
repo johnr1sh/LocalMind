@@ -113,13 +113,16 @@ export async function getConv(id) {
   return wrap(tx.objectStore(S.CONVS).get(id));
 }
 
-export async function updateConv(id, patch = {}) {
+// `touch: false` is for metadata-only edits (rename, pin) that must not move an
+// old conversation to the top of the sidebar as if it had new activity.
+export async function updateConv(id, patch = {}, { touch = true } = {}) {
   const d = await open();
   const tx = d.transaction(S.CONVS, 'readwrite');
   const store = tx.objectStore(S.CONVS);
   const existing = await wrap(store.get(id));
   if (!existing) return null;
-  const updated = { ...existing, ...patch, updatedAt: Date.now() };
+  const updated = { ...existing, ...patch };
+  if (touch) updated.updatedAt = Date.now();
   await wrap(store.put(updated));
   return updated;
 }
@@ -127,14 +130,14 @@ export async function updateConv(id, patch = {}) {
 export async function deleteConv(id) {
   const d = await open();
 
-  // delete messages first
-  const mtx = d.transaction(S.MSGS, 'readwrite');
-  const mstore = mtx.objectStore(S.MSGS);
+  // One transaction: a conversation and its messages are removed together or not at all.
+  const tx = d.transaction([S.MSGS, S.CONVS], 'readwrite');
+  const done = transactionDone(tx);
+  const mstore = tx.objectStore(S.MSGS);
   const msgs = await wrap(mstore.index('convId').getAll(id));
-  for (const m of msgs) await wrap(mstore.delete(m.id));
-
-  const ctx = d.transaction(S.CONVS, 'readwrite');
-  await wrap(ctx.objectStore(S.CONVS).delete(id));
+  for (const m of msgs) mstore.delete(m.id);
+  tx.objectStore(S.CONVS).delete(id);
+  await done;
 }
 
 // --- messages ---
@@ -182,9 +185,11 @@ export async function deleteMsg(id) {
 export async function clearMsgs(convId) {
   const d = await open();
   const tx = d.transaction(S.MSGS, 'readwrite');
+  const done = transactionDone(tx);
   const store = tx.objectStore(S.MSGS);
   const msgs = await wrap(store.index('convId').getAll(convId));
-  for (const m of msgs) await wrap(store.delete(m.id));
+  for (const m of msgs) store.delete(m.id);
+  await done;
 }
 
 // --- settings ---
@@ -285,8 +290,9 @@ export async function importData(data) {
 
 export async function clearAll() {
   const d = await open();
-  const ctxC = d.transaction(S.CONVS, 'readwrite');
-  await wrap(ctxC.objectStore(S.CONVS).clear());
-  const ctxM = d.transaction(S.MSGS, 'readwrite');
-  await wrap(ctxM.objectStore(S.MSGS).clear());
+  const tx = d.transaction([S.CONVS, S.MSGS], 'readwrite');
+  const done = transactionDone(tx);
+  tx.objectStore(S.CONVS).clear();
+  tx.objectStore(S.MSGS).clear();
+  await done;
 }

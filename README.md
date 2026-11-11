@@ -134,6 +134,8 @@ A ChatGPT-style hybrid online/offline app that runs AI models locally in your br
 > The official `Qwen/Qwen2.5-0.5B-Instruct` repo has no `onnx/` folder, so it can never load in
 > Transformers.js. Old saved settings pointing at it are migrated automatically.
 
+The Transformers.js runtime is pinned in one place (`TRANSFORMERS_VERSION` in `ai.js`, currently 4.3.2); `service-worker.js` keeps a runtime cache named after that version and CI fails if the two drift apart.
+
 The app defaults to SmolLM2 135M to minimize the first download and reduce memory pressure. Settings → Model Library lets users download and keep multiple models, activate one, or remove its cached files. Only one inference pipeline is kept resident at a time. A failed model load stops generation and reports the real error; it never stores a simulated helper message as an AI answer.
 
 ---
@@ -287,6 +289,7 @@ The export format is versioned (`"version": 1`) for forward compatibility.
 - WebGPU is not available in your browser — the app is using CPU (WASM)
 - Use Chrome or Edge for WebGPU support
 - Reduce Max Tokens in Settings to get faster responses
+- Temperature `0` means deterministic (greedy) decoding
 
 **App doesn't work offline**
 - Make sure you opened the app at least once while online
@@ -312,7 +315,8 @@ localmind/
 ├── manifest.json       # PWA manifest
 ├── vercel.json         # Deployment config
 ├── api/version.js      # Vercel deployment metadata endpoint
-├── icons/              # PWA icons (PNG + SVG)
+├── scripts/            # verify-model-library.mjs (CI invariants)
+├── icons/              # PWA icons (SVG)
 └── README.md
 ```
 
