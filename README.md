@@ -41,7 +41,7 @@ A ChatGPT-style hybrid online/offline app that runs AI models locally in your br
 **Decision:** Run all inference locally with Transformers.js (ONNX Runtime Web). Use the network only for initial app delivery, model/runtime downloads, and deployment-version checks. Cache the app shell and runtime assets for offline launch; keep conversations and settings in IndexedDB. When the network returns, resume update checks without requiring a user restart. No cloud inference, remote conversation sync, authentication, or account backend is introduced.
 
 **Consequences:**
-- Models must be downloaded once while online (~360MB–2.3GB)
+- Models must be downloaded once while online (~117MB–2.3GB)
 - Already downloaded models can generate responses offline
 - Generation speed depends on the user's device (WebGPU >> WASM)
 - App updates and new model downloads require internet access
@@ -79,7 +79,7 @@ A ChatGPT-style hybrid online/offline app that runs AI models locally in your br
 
 **Decision:** Static assets → Cache First. HTML → Network First. Transformers.js CDN → Cache First. Model weights are **not** handled by the service worker; Transformers.js caches them itself in `transformers-cache` (caching them twice doubled disk use and buffered the whole download in RAM).
 
-**Why not precache model weights?** They're 360MB–2.3GB. Precaching at SW install time would fail on most devices and block SW activation. Lazy caching on first use is safer.
+**Why not precache model weights?** They can range from about 117MB to multiple gigabytes. Precaching at SW install time would fail on most devices and block SW activation. Lazy caching on first use is safer.
 
 ---
 
@@ -218,8 +218,8 @@ Open Settings → Application Version to compare the service worker currently co
 
 ## Offline Usage
 
-1. Open the app while online — the service worker caches the application shell and runtime assets.
-2. Start a chat — this triggers the selected model download (~360MB for SmolLM2).
+1. Open the app while online — the service worker takes control and caches the app plus the Transformers.js / ONNX Runtime CDN dependencies.
+2. Open Settings → Model Library and choose Download for a model (SmolLM2 135M is the smallest starter).
 3. Wait for the model badge to show Ready.
 4. Confirm your conversations are visible, then disconnect from the internet.
 5. Reopen LocalMind from its installed PWA or cached browser tab and continue chatting offline.
