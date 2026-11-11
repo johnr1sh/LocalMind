@@ -35,7 +35,10 @@ async function init() {
   // importing the CDN-hosted inference runtime or checking model caches.
   if ('serviceWorker' in navigator) {
     try {
-      await navigator.serviceWorker.ready;
+      await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise(resolve => setTimeout(resolve, 2500)),
+      ]);
       if (!navigator.serviceWorker.controller) {
         await new Promise(resolve => {
           const done = () => { clearTimeout(timeout); resolve(); };
@@ -556,8 +559,6 @@ async function runGeneration(convId) {
 
   try {
     const full = await AI.generate(msgs, opts, push, done);
-    if (AI.isFallback()) refreshModelBadge('fallback', modelIdForGeneration());
-
     if (!full || !full.trim()) {
       el.remove();
       return;
