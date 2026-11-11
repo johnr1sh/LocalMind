@@ -497,9 +497,16 @@ async function runGeneration(convId) {
     try {
       await loadModel(modelId);
     } catch (err) {
+      // Never generate or save a simulated "Browser Helper" answer as if it were AI.
+      // Keep the user's message in history and stop this generation cleanly.
       UI.setProgress({ status: 'fallback' });
-      UI.showErr(`Model load failed. Browser Helper mode is active. ${err.message}`, 9000);
-      refreshModelBadge('fallback', modelId);
+      UI.showErr(`Local model could not start. No AI response was generated. ${err.message}`, 12000);
+      refreshModelBadge('error', modelId);
+      document.getElementById('typing-indicator').classList.add('hidden');
+      app.generating = false;
+      setInputEnabled(true);
+      await refreshCacheChips();
+      return;
     }
   }
 
@@ -755,13 +762,69 @@ async function refreshCacheChips() {
     const cached = await AI.isCached(id);
     const chip = document.createElement('div');
     chip.className = 'model-cache-chip';
-    chip.innerHTML = `
-      <span class="model-cache-chip-name">${info.name} (${info.size})</span>
-      <span class="model-cache-chip-status ${cached ? 'cached' : 'not-cached'}">${cached ? 'Cached' : 'Not downloaded'}</span>`;
+
+    const name = document.createElement('span');
+    name.className = 'model-cache-chip-name';
+    name.textContent = `${info.name} · ${info.size}`;
+
+    const status = document.createElement('span');
+    status.className = `model-cache-chip-status ${cached ? 'cached' : 'not-cached'}`;
+    status.textContent = cached ? 'Downloaded' : 'Not downloaded';
+
+    const actions = document.createElement('div');
+    actions.className = 'model-cache-chip-actions';
+
+    const useButton = document.createElement('button');
+    useButton.type = 'button';
+    useButton.className = 'btn btn-ghost btn-sm';
+    useButton.textContent = cached ? 'Use' : 'Download';
+    useButton.disabled = app.generating;
+    useButton.addEventListener('click', async () => {
+      if (app.generating) return;
+      useButton.disabled = true;
+      useButton.textContent = cached ? 'Loading…' : 'Downloading…';
+      try {
+        await loadModel(id, { showPanel: true });
+        app.settings.model = id;
+        await DB.setSetting('model', id);
+        const select = document.getElementById('model-select');
+        if (select) select.value = id;
+        refreshModelBadge('ready', id);
+        UI.showOk(`${info.name} is ready for local inference.`);
+      } catch (err) {
+        refreshModelBadge('error', id);
+        UI.showErr(`Could not prepare ${info.name}. ${err.message}`, 12000);
+      } finally {
+        await refreshCacheChips();
+      }
+    });
+    actions.appendChild(useButton);
+
+    if (cached) {
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button';
+      removeButton.className = 'btn btn-ghost btn-sm';
+      removeButton.textContent = 'Remove';
+      removeButton.disabled = app.generating;
+      removeButton.addEventListener('click', async () => {
+        if (app.generating) return;
+        const ok = await UI.confirmDlg('Remove model', `Delete the downloaded files for ${info.name}? Your conversations will remain.`, 'Remove');
+        if (!ok) return;
+        try {
+          await AI.clearModelCache(id);
+          await refreshCacheChips();
+          UI.showOk(`${info.name} download removed.`);
+        } catch (err) {
+          UI.showErr(`Could not remove model files. ${err.message}`);
+        }
+      });
+      actions.appendChild(removeButton);
+    }
+
+    chip.append(name, status, actions);
     el.appendChild(chip);
   }
 }
-
 
 async function refreshSystemHealth(modelId = app.settings.model || AI.DEFAULT_MODEL) {
   const health = await AI.systemHealth(AI.normalizeModelId(modelId));
