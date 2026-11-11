@@ -126,6 +126,8 @@ A ChatGPT-style hybrid online/offline app that runs AI models locally in your br
 | `onnx-community/SmolLM2-135M-Instruct-ONNX` | 117MB q4f16 / 181MB q4 | WebGPU or WASM | Ultra-light starter |
 | `HuggingFaceTB/SmolLM2-360M-Instruct` | 273MB q4f16 / 388MB q4 | WebGPU or WASM | Balanced everyday model |
 | `onnx-community/Qwen2.5-0.5B-Instruct` | 483MB q4f16 / 786MB q4 | WebGPU or WASM | Multilingual option |
+| `onnx-community/Qwen3-0.6B-ONNX` | 570MB q4f16 / 919MB q4 | WebGPU or WASM | Newer compact multilingual model |
+| `onnx-community/TinyLlama-1.1B-Chat-v1.0-ONNX` | 714MB q4f16 / 910MB q4 | WebGPU or WASM | Chat-tuned alternative |
 | `onnx-community/Qwen2.5-1.5B-Instruct` | 1.22GB q4f16 / 1.79GB q4 | WebGPU or WASM | Higher quality, higher memory |
 | `onnx-community/Phi-3.5-mini-instruct-onnx-web` | ~2.3GB q4f16 | **WebGPU with shader-f16 only** | Advanced / high-memory |
 
