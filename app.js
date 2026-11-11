@@ -163,8 +163,9 @@ async function checkForUpdates() {
 }
 
 async function registerSW() {
+  const latest = await fetchDeploymentVersion();
   if (!('serviceWorker' in navigator)) {
-    renderVersionStatus(null, await fetchDeploymentVersion(), 'Service workers are not supported');
+    renderVersionStatus(null, latest, 'Service workers are not supported');
     return;
   }
 
@@ -186,7 +187,6 @@ async function registerSW() {
   });
 
   try {
-    const latest = await fetchDeploymentVersion();
     // The commit SHA in the script URL is the automatic build identifier.
     // Changing it makes the browser install a distinct worker and cache namespace.
     const workerUrl = latest?.commit
