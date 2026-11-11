@@ -10,7 +10,10 @@
 const VER = new URL(self.location.href).searchParams.get('v') || 'local';
 const CACHE_VERSION = VER.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48) || 'local';
 const STATIC = `lm-static-${CACHE_VERSION}`;
-const RUNTIME = `lm-rt-${CACHE_VERSION}`;
+// The Transformers.js version is pinned in ai.js, so keep its runtime cache
+// stable across app deployments. Otherwise every update would delete the only
+// offline copy of ONNX Runtime/WASM before the next page load can reuse it.
+const RUNTIME = 'lm-runtime-transformers-4-3-0';
 const PRECACHE = [
   './',
   './index.html',
