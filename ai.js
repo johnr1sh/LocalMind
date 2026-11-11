@@ -10,13 +10,36 @@
  * Transformers.js gets a 404 and the model "downloads" forever / never loads.
  */
 
-import {
-  pipeline,
-  TextStreamer,
-  InterruptableStoppingCriteria,
-  ModelRegistry,
-  env,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0';
+// Load the heavy inference runtime only after the service worker controls the page.
+// A static CDN import runs before app.js can register the worker and breaks reliable
+// offline startup on a fresh install.
+const RUNTIME_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0';
+let runtimePromise = null;
+let pipeline = null;
+let TextStreamer = null;
+let InterruptableStoppingCriteria = null;
+let ModelRegistry = null;
+let env = null;
+
+async function ensureRuntime() {
+  if (!runtimePromise) {
+    runtimePromise = import(RUNTIME_URL).then(runtime => {
+      pipeline = runtime.pipeline;
+      TextStreamer = runtime.TextStreamer;
+      InterruptableStoppingCriteria = runtime.InterruptableStoppingCriteria;
+      ModelRegistry = runtime.ModelRegistry;
+      env = runtime.env;
+      if (!pipeline || !TextStreamer || !InterruptableStoppingCriteria || !ModelRegistry || !env) {
+        throw new Error('The Transformers.js runtime loaded, but required inference APIs are missing.');
+      }
+      return runtime;
+    }).catch(err => {
+      runtimePromise = null;
+      throw new Error(`Could not load the local AI runtime from the CDN. Check the connection or reload after the runtime has been cached. ${err?.message || String(err)}`);
+    });
+  }
+  return runtimePromise;
+}
 
 /**
  * Per-model runtime plan.
@@ -353,6 +376,7 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
   const cfg = MODELS[modelId];
   if (!cfg) throw new Error(`Unknown model: ${modelId}`);
 
+  await ensureRuntime();
   setupEnv();
   loading = true;
   loadingModel = modelId;
@@ -582,6 +606,7 @@ export async function isCached(modelId) {
   try {
     modelId = normalizeModelId(modelId);
     if (!('caches' in self)) return false;
+    await ensureRuntime();
     const plan = await planFor(modelId);
     const dtypes = [...new Set(plan.map(a => a.dtype))];
     for (const dtype of dtypes) {
@@ -596,6 +621,7 @@ export async function isCached(modelId) {
 export async function clearModelCache(modelId) {
   modelId = normalizeModelId(modelId);
   if (loadedModel === modelId) await disposePipe();
+  await ensureRuntime();
   const cfg = MODELS[modelId];
   const dtypes = new Set([
     cfg.webgpu?.dtype, cfg.webgpu?.noF16Dtype, cfg.wasm?.dtype,
