@@ -142,9 +142,13 @@ function renderVersionStatus(running, latest, detail = '') {
         : 'Cannot verify while offline';
   const meta = document.getElementById('app-version-meta');
   if (meta) {
-    const environment = latest?.environment || 'unknown environment';
-    const deployedAt = latest?.createdAt ? new Date(latest.createdAt).toLocaleString() : 'deployment time unavailable';
-    meta.textContent = `${environment} · ${deployedAt}${detail ? ` · ${detail}` : ''}`;
+    const details = [
+      latest?.environment || 'unknown environment',
+      latest?.branch || null,
+      latest?.deploymentId ? `deployment ${latest.deploymentId.slice(0, 10)}` : null,
+      detail || null,
+    ].filter(Boolean);
+    meta.textContent = details.join(' · ');
   }
   return outdated;
 }
