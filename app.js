@@ -696,6 +696,26 @@ function bindAll() {
 
   $('model-select').addEventListener('change', e => refreshSystemHealth(e.target.value));
 
+  $('retry-model-btn').addEventListener('click', async () => {
+    const button = $('retry-model-btn');
+    if (app.generating || button.disabled) return;
+    const modelId = AI.normalizeModelId($('model-select')?.value || app.settings.model || AI.DEFAULT_MODEL);
+    button.disabled = true;
+    button.textContent = 'Retrying…';
+    try {
+      AI.resetModel();
+      await loadModel(modelId, { showPanel: true, skipConfirm: true });
+      UI.showOk(`${AI.MODELS[modelId]?.name || 'Model'} loaded successfully.`);
+      await refreshCacheChips();
+    } catch (err) {
+      refreshModelBadge('fallback', modelId);
+      UI.showErr(`Model retry failed. Browser Helper mode remains available. ${err.message}`, 10000);
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Retry Model Load';
+    }
+  });
+
   // live range preview
   $('temperature-input').addEventListener('input', e => { $('temperature-value').textContent = parseFloat(e.target.value).toFixed(2); });
   $('max-tokens-input').addEventListener('input', e => { $('max-tokens-value').textContent = e.target.value; });
