@@ -14,7 +14,7 @@ A ChatGPT-style hybrid online/offline app that runs AI models locally in your br
 - **Persistent chat history** — stored in IndexedDB, survives page refreshes
 - **Resilient model setup** — shared downloads, WebGPU→WASM fallback, dtype fallback, and clear progress diagnostics
 - **Browser Helper mode** — if the model cannot download, LocalMind can still explain browser/storage/WebGPU status and recovery steps
-- **Multi-model support** — SmolLM2 360M, Qwen2.5 0.5B, Phi-3.5 Mini
+- **Multi-model library** — SmolLM2 135M and 360M, Qwen2.5 0.5B and 1.5B, Phi-3.5 Mini; download, activate, and remove models independently
 - **Streaming responses** — real-time token output
 - **Markdown rendering** — code blocks, lists, bold, italic, links
 - **Installable PWA** — works on Android, iOS, and desktop
@@ -121,11 +121,13 @@ A ChatGPT-style hybrid online/offline app that runs AI models locally in your br
 
 ## Supported Models
 
-| Model (Hugging Face repo) | Download | Runs on | Notes |
-|-------|------|-------|---------|
-| `HuggingFaceTB/SmolLM2-360M-Instruct` | ~300MB (WebGPU q4f16) / ~420MB (CPU q4) | WebGPU or CPU | Default, safest |
-| `onnx-community/Qwen2.5-0.5B-Instruct` | ~485MB (WebGPU q4f16) / ~515MB (CPU q8) | WebGPU or CPU | Better quality |
-| `onnx-community/Phi-3.5-mini-instruct-onnx-web` | ~2.3GB (q4f16 only) | **WebGPU with shader-f16 only** | Largest; blocked on devices without it |
+| Model (Hugging Face repo) | Approx. quantized weights | Runtime | Profile |
+|-------|------:|-------|---------|
+| `onnx-community/SmolLM2-135M-Instruct-ONNX` | 117MB q4f16 / 181MB q4 | WebGPU or WASM | Ultra-light starter |
+| `HuggingFaceTB/SmolLM2-360M-Instruct` | 273MB q4f16 / 388MB q4 | WebGPU or WASM | Balanced everyday model |
+| `onnx-community/Qwen2.5-0.5B-Instruct` | 483MB q4f16 / 786MB q4 | WebGPU or WASM | Multilingual option |
+| `onnx-community/Qwen2.5-1.5B-Instruct` | 1.22GB q4f16 / 1.79GB q4 | WebGPU or WASM | Higher quality, higher memory |
+| `onnx-community/Phi-3.5-mini-instruct-onnx-web` | ~2.3GB q4f16 | **WebGPU with shader-f16 only** | Advanced / high-memory |
 
 > The official `Qwen/Qwen2.5-0.5B-Instruct` repo has no `onnx/` folder, so it can never load in
 > Transformers.js. Old saved settings pointing at it are migrated automatically.
@@ -265,7 +267,7 @@ The export format is versioned (`"version": 1`) for forward compatibility.
 - First-time model/runtime downloads require internet. Check your connection or try a different network (some proxies block Hugging Face).
 - If a model is already cached, LocalMind can still load and run it offline.
 - If a download was interrupted, reconnect and retry; do not clear a valid existing model cache.
-- The model caches after the first successful download — subsequent loads can work offline.
+- Each completed model caches independently; subsequent loads can work offline when its exact runtime/dtype files are cached.
 
 **"std::bad_alloc", "Can't create a session", or "ERROR_CODE: 6" during model load**
 - This is an ONNX Runtime memory-allocation failure, not a browser storage-quota error. Model files may fit in Cache Storage while the runtime still cannot reserve enough working memory.
