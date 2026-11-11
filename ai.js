@@ -378,7 +378,7 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
   // must never initialize two ONNX sessions in parallel.
   loading = true;
   loadingModel = modelId;
-  fallbackMode = false;
+
   lastError = null;
 
   loadingPromise = (async () => {
@@ -657,7 +657,7 @@ export async function clearModelCache(modelId) {
     }
   }
   loadedRuntime = null;
-  fallbackMode = false;
+
   return deleted;
 }
 
