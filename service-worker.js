@@ -1,25 +1,16 @@
 /**
- * service-worker.js
- * Cache-First for static + CDN assets. Network-First for HTML.
- * Model files get their own long-lived cache bucket.
+ * LocalMind service worker
  *
- * ADR: We do NOT precache Transformers.js or model weights at install time —
- * they're too large and would block SW activation. Instead we cache them
- * lazily on first fetch. This trades slightly slower first-run offline for
- * a much faster install and no quota issues.
+ * Each deployment receives a unique worker URL (?v=<commit SHA>) and therefore
+ * an isolated static/runtime cache namespace. This prevents an installing worker
+ * from overwriting assets still being served by the currently active worker.
+ * The Transformers.js model cache is deliberately left untouched.
  */
 
-const VER = 'v1.5.0';
-const STATIC = `lm-static-${VER}`;
-// Keep the model cache stable across app releases: model files are large and
-// should not be downloaded again just because the UI or controller changed.
-// NOTE: model weights are NOT cached here any more. Transformers.js already stores
-// them in its own Cache Storage bucket ('transformers-cache'); also caching them in
-// the service worker doubled disk usage and buffered hundreds of MB of tee'd stream
-// in memory during download (a common cause of "Array buffer allocation failed").
-const RUNTIME = `lm-rt-${VER}`;
-const ALL = [STATIC, RUNTIME];
-
+const VER = new URL(self.location.href).searchParams.get('v') || 'local';
+const CACHE_VERSION = VER.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48) || 'local';
+const STATIC = `lm-static-${CACHE_VERSION}`;
+const RUNTIME = `lm-rt-${CACHE_VERSION}';
 const PRECACHE = [
   './',
   './index.html',
@@ -33,78 +24,78 @@ const PRECACHE = [
   './icons/icon-maskable.svg',
 ];
 
-self.addEventListener('install', e => {
-  e.waitUntil(
-    caches.open(STATIC)
-      .then(c => c.addAll(PRECACHE))
-      .then(() => self.skipWaiting())
-      .catch(err => console.error('[SW] install failed:', err))
-  );
+self.addEventListener('install', event => {
+  event.waitUntil((async () => {
+    const cache = await caches.open(STATIC);
+    await cache.addAll(PRECACHE);
+    await self.skipWaiting();
+  })());
 });
 
-self.addEventListener('activate', e => {
-  e.waitUntil(
-    Promise.all([
-      caches.keys().then(keys =>
-        // Drops old app/runtime buckets AND the old duplicate lm-models-* copies.
-        Promise.all(keys.filter(k => k.startsWith('lm-') && !ALL.includes(k)).map(k => caches.delete(k)))
-      ),
-      self.clients.claim(),
-    ])
-  );
+self.addEventListener('activate', event => {
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    // Keep the Transformers.js cache intact; only retire LocalMind's old app caches.
+    await Promise.all(keys
+      .filter(key => (
+        (key.startsWith('lm-static-') && key !== STATIC)
+        || (key.startsWith('lm-rt-') && key !== RUNTIME)
+        || key.startsWith('lm-models-')
+      ))
+      .map(key => caches.delete(key)));
+    await self.clients.claim();
+  })());
 });
 
-self.addEventListener('fetch', e => {
-  const url = new URL(e.request.url);
+self.addEventListener('fetch', event => {
+  const request = event.request;
+  const url = new URL(request.url);
 
-  if (e.request.method !== 'GET') return;
-  if (!url.protocol.startsWith('http')) return;
+  if (request.method !== 'GET' || url.origin !== self.location.origin) return;
+  // Version metadata must always reach the deployment endpoint, never a stale SW cache.
+  if (url.pathname.includes('/api/')) return;
 
-  // Let model downloads (huggingface.co, hf.co, xet/cdn-lfs) go straight to the
-  // network so Transformers.js can stream, range-request and cache them itself.
-  if (isModel(url)) return;
-
-  if (isCDN(url)) {
-    e.respondWith(cacheFirst(e.request, RUNTIME));
+  if (isHTML(request)) {
+    event.respondWith(networkFirst(request, STATIC));
   } else if (isStatic(url)) {
-    e.respondWith(cacheFirst(e.request, STATIC));
-  } else if (isHTML(e.request)) {
-    e.respondWith(networkFirst(e.request, STATIC));
+    event.respondWith(cacheFirst(request, STATIC));
   }
 });
 
-async function cacheFirst(req, cacheName) {
+async function cacheFirst(request, cacheName) {
   try {
-    const c = await caches.open(cacheName);
-    const hit = await c.match(req);
-    if (hit) return hit;
+    const cache = await caches.open(cacheName);
+    const cached = await cache.match(request);
+    if (cached) return cached;
 
-    const res = await fetch(req.clone());
-    if (res.ok && res.status === 200) {
-      c.put(req, res.clone()).catch(() => {}); // async; ignore quota errors
+    const response = await fetch(request);
+    if (response.ok && response.status === 200) {
+      await cache.put(request, response.clone()).catch(() => {});
     }
-    return res;
-  } catch (err) {
-    return offline(req);
-  }
-}
-
-async function networkFirst(req, cacheName) {
-  try {
-    const res = await fetch(req.clone());
-    if (res.ok) {
-      const c = await caches.open(cacheName);
-      c.put(req, res.clone());
-    }
-    return res;
+    return response;
   } catch {
-    const c = await caches.open(cacheName);
-    return (await c.match(req)) || (await c.match('./index.html')) || offline(req);
+    return offline(request);
   }
 }
 
-function offline(req) {
-  if (req.headers.get('Accept')?.includes('text/html')) {
+async function networkFirst(request, cacheName) {
+  try {
+    const response = await fetch(request, { cache: 'no-store' });
+    if (response.ok) {
+      const cache = await caches.open(cacheName);
+      await cache.put(request, response.clone()).catch(() => {});
+    }
+    return response;
+  } catch {
+    const cache = await caches.open(cacheName);
+    return (await cache.match(request))
+      || (await cache.match('./index.html'))
+      || offline(request);
+  }
+}
+
+function offline(request) {
+  if (request.headers.get('Accept')?.includes('text/html')) {
     return new Response(
       `<!DOCTYPE html><html><body style="font-family:system-ui;text-align:center;padding:60px;color:#888">
         <h2>You're offline</h2>
@@ -116,27 +107,21 @@ function offline(req) {
   return new Response('Offline', { status: 503 });
 }
 
-function isModel(url) {
-  const h = url.hostname;
-  return h === 'huggingface.co' || h.endsWith('.huggingface.co') || h === 'hf.co' || h.endsWith('.hf.co')
-    || url.pathname.includes('cdn-lfs');
-}
-
-function isCDN(url) {
-  return url.href.includes('cdn.jsdelivr.net/npm/@huggingface');
-}
-
 function isStatic(url) {
-  const ext = url.pathname.split('.').pop().toLowerCase();
-  return url.origin === self.location.origin
-    && ['css', 'js', 'png', 'jpg', 'svg', 'ico', 'json', 'woff', 'woff2'].includes(ext);
+  const extension = url.pathname.split('.').pop().toLowerCase();
+  return ['css', 'js', 'png', 'jpg', 'svg', 'ico', 'json', 'woff', 'woff2'].includes(extension);
 }
 
-function isHTML(req) {
-  return req.headers.get('Accept')?.includes('text/html') ?? false;
+function isHTML(request) {
+  return request.headers.get('Accept')?.includes('text/html') ?? false;
 }
 
-self.addEventListener('message', e => {
-  if (e.data?.type === 'SKIP_WAITING') self.skipWaiting();
-  if (e.data?.type === 'GET_VERSION') e.ports[0]?.postMessage({ version: VER });
+self.addEventListener('message', event => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
+  if (event.data?.type === 'GET_VERSION') {
+    event.ports[0]?.postMessage({
+      version: VER,
+      shortVersion: VER.slice(0, 12),
+    });
+  }
 });
