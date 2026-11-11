@@ -73,3 +73,10 @@ assert.match(ai, /wasm\.proxy = true/,
   'CPU/WASM inference must use the ONNX Runtime proxy worker to keep the UI responsive.');
 assert.match(ai, /WASM inference worker:/,
   'Browser diagnostics must report whether WASM inference is proxied.');
+
+assert.ok(ai.includes('function isProxyWorkerError'),
+  'Worker creation failures must be detected for compatibility fallback.');
+assert.ok(ai.includes('orderedAttempts.splice(index + 1, 0, { ...attempt, proxyWorker: false })'),
+  'A blocked proxy worker must retry WASM once in compatibility mode.');
+assert.match(ai, /WASM inference worker:/,
+  'Browser diagnostics must report whether WASM inference is proxied.');
