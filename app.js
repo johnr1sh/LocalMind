@@ -1017,7 +1017,7 @@ function bindAll() {
     button.textContent = 'Retrying…';
     try {
       AI.resetModel();
-      await loadModel(modelId, { showPanel: true, skipConfirm: true });
+      await loadModel(modelId, { showPanel: true, skipConfirm: false });
       UI.showOk(`${AI.MODELS[modelId]?.name || 'Model'} loaded successfully.`);
       await refreshCacheChips();
     } catch (err) {
