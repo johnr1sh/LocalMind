@@ -437,6 +437,7 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
 
     for (let index = 0; index < orderedAttempts.length; index += 1) {
       const attempt = orderedAttempts[index];
+      let candidate = null;
       try {
         onProgress({
           status: index ? 'retry' : 'initiate',
@@ -449,7 +450,7 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
             : `Loading ${cfg.name} with ${attempt.device.toUpperCase()} (${attempt.dtype})…`,
         });
 
-        const candidate = await pipeline('text-generation', modelId, {
+        candidate = await pipeline('text-generation', modelId, {
           dtype: attempt.dtype,
           device: attempt.device,
           progress_callback: update => {
@@ -462,6 +463,21 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
         if (typeof candidate !== 'function' || !candidate.tokenizer) {
           try { await candidate?.dispose?.(); } catch { /* ignore */ }
           throw new Error('The inference runtime returned an incomplete text-generation pipeline.');
+        }
+
+        // A pipeline can construct successfully and still fail on its first
+        // ONNX session/generation. Run a tiny real inference before declaring Ready.
+        onProgress({
+          status: 'loading',
+          progress: 92,
+          modelId,
+          device: attempt.device,
+          dtype: attempt.dtype,
+          text: 'Running a short inference self-test…',
+        });
+        const smoke = await candidate('Hello.', { max_new_tokens: 4, do_sample: false });
+        if (!Array.isArray(smoke) || smoke.length === 0) {
+          throw new Error('The model initialized but returned no output during its inference self-test.');
         }
 
         pipe = candidate;
@@ -481,6 +497,9 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
         lastError = err;
         failures.push({ ...attempt, message: err?.message || String(err) });
         console.warn(`[AI] ${modelId} failed on ${attempt.device}/${attempt.dtype}:`, err);
+        try { await candidate?.dispose?.(); } catch (disposeError) {
+          console.warn('[AI] failed candidate disposal:', disposeError);
+        }
         await disposePipe();
       }
     }
