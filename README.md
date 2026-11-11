@@ -77,7 +77,7 @@ A ChatGPT-style hybrid online/offline app that runs AI models locally in your br
 
 **Status:** Accepted
 
-**Decision:** Static assets → Cache First. HTML → Network First. Transformers.js CDN → Cache First. Model weights are **not** handled by the service worker; Transformers.js caches them itself in `transformers-cache` (caching them twice doubled disk use and buffered the whole download in RAM).
+**Decision:** Static assets → Cache First. HTML → Network First. Transformers.js and ONNX Runtime CDN dependencies → Cache First in a runtime cache that survives app deployments. Model weights are **not** handled by the service worker; Transformers.js caches them itself in `transformers-cache` (caching them twice doubled disk use and buffered the whole download in RAM).
 
 **Why not precache model weights?** They can range from about 117MB to multiple gigabytes. Precaching at SW install time would fail on most devices and block SW activation. Lazy caching on first use is safer.
 
