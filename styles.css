@@ -1236,15 +1236,17 @@ body {
 .model-cache-chip {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 8px 10px;
   background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   font-size: 0.8rem;
 }
 
-.model-cache-chip-name { flex: 1; color: var(--text-2); }
+.model-cache-chip-name { flex: 1 1 180px; color: var(--text-2); }
+.model-cache-chip-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .model-cache-chip-status { font-size: 0.75rem; }
 .model-cache-chip-status.cached { color: var(--success); }
 .model-cache-chip-status.not-cached { color: var(--text-3); }
