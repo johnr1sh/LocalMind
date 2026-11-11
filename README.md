@@ -1,4 +1,4 @@
-# LocalMind — Fully Offline AI Chat PWA
+# LocalMind — AI Chat (Offline Compatability)
 
 A ChatGPT-style hybrid online/offline app that runs AI models locally in your browser. Internet access is used for first-time model downloads and application updates; once the app shell and a model are cached, chat, history, and inference continue offline. No cloud inference, API keys, accounts, or tracking. Powered by [Transformers.js](https://huggingface.co/docs/transformers.js) and IndexedDB.
 
