@@ -68,3 +68,15 @@ assert.match(app, /invalid deployment metadata/,
   'Deployment metadata must be validated before registering a versioned worker.');
 
 console.log(`LocalMind static checks passed: ${modelIds.length} model entries, selector parity, runtime lifecycle, offline cache, and JSON configuration.`);
+
+assert.match(ai, /wasm\.proxy = true/,
+  'CPU/WASM inference must use the ONNX Runtime proxy worker to keep the UI responsive.');
+assert.match(ai, /WASM inference worker:/,
+  'Browser diagnostics must report whether WASM inference is proxied.');
+
+assert.ok(ai.includes('function isProxyWorkerError'),
+  'Worker creation failures must be detected for compatibility fallback.');
+assert.ok(ai.includes('orderedAttempts.splice(index + 1, 0, { ...attempt, proxyWorker: false })'),
+  'A blocked proxy worker must retry WASM once in compatibility mode.');
+assert.match(ai, /WASM inference worker:/,
+  'Browser diagnostics must report whether WASM inference is proxied.');

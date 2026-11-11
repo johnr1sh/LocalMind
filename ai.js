@@ -337,15 +337,14 @@ function setupEnv() {
   env.useBrowserCache = true;
   env.useWasmCache = true;
 
-  // Static no-build app: keep ONNX Runtime on the main thread. Multi-threaded WASM
-  // needs SharedArrayBuffer, i.e. cross-origin isolation, which this host does not
-  // enable — so only use extra threads when the page happens to be isolated.
+  // CPU/WASM inference can monopolize the browser's main thread and freeze
+  // typing, scrolling, and message rendering. ONNX Runtime's proxy worker moves
+  // that computation off the UI thread without requiring SharedArrayBuffer.
+  // This applies only to WASM; WebGPU uses its own execution provider and cannot
+  // use the WASM proxy. Keep one WASM thread to limit peak memory on low-RAM devices.
   const wasm = env.backends?.onnx?.wasm;
   if (wasm) {
-    wasm.proxy = false;
-    // A single WASM worker minimizes peak memory during ONNX session creation.
-    // More threads can multiply temporary allocations and trigger std::bad_alloc
-    // on otherwise capable machines. Prefer predictable startup over throughput.
+    wasm.proxy = true;
     wasm.numThreads = 1;
   }
 }
@@ -382,6 +381,18 @@ function isMemoryAllocationError(err) {
     || message.includes('cannot create a session')
     || message.includes('error_code: 6')
     || message.includes('device lost');
+}
+
+function isProxyWorkerError(err) {
+  const message = (err?.message || String(err || '')).toLowerCase();
+  return message.includes('worker') && (
+    message.includes('blob:')
+    || message.includes('content security policy')
+    || message.includes('csp')
+    || message.includes('failed to construct')
+    || message.includes('refused to create')
+    || message.includes('unsafe-eval')
+  );
 }
 
 function memoryRecoveryAdvice() {
@@ -564,6 +575,24 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
           console.warn('[AI] failed candidate disposal:', disposeError);
         }
         await disposePipe();
+
+        // Some strict Content Security Policies block ONNX Runtime's Blob worker.
+        // Retry that WASM attempt once without proxying instead of failing model load.
+        // This compatibility path may be slower, but keeps the model usable.
+        const wasm = env.backends?.onnx?.wasm;
+        if (attempt.device === 'wasm' && attempt.proxyWorker !== false
+          && wasm?.proxy && isProxyWorkerError(err)) {
+          wasm.proxy = false;
+          orderedAttempts.splice(index + 1, 0, { ...attempt, proxyWorker: false });
+          onProgress({
+            status: 'retry',
+            progress: 0,
+            modelId,
+            device: 'wasm',
+            dtype: attempt.dtype,
+            text: 'The browser blocked the inference worker. Retrying in compatibility mode; the page may respond more slowly.',
+          });
+        }
       }
     }
 
@@ -658,6 +687,7 @@ export async function browserDiagnostics() {
   if (gpu.usable) parts.push(`- WebGPU shader-f16: ${gpu.f16 ? 'supported' : 'not supported'}`);
   parts.push(`- Planned runtime: ${(await planFor(DEFAULT_MODEL)).map(item => `${item.device}/${item.dtype}`).join(', ') || 'none'}`);
   parts.push(`- WebAssembly: ${typeof WebAssembly !== 'undefined' ? 'available' : 'not available'}`);
+  parts.push(`- WASM inference worker: ${env?.backends?.onnx?.wasm?.proxy ? 'enabled' : 'disabled'} (WebGPU runs separately)`);
   parts.push(`- Device memory: ${Number.isFinite(navigator.deviceMemory) ? `${navigator.deviceMemory} GB` : 'not reported'}`);
   parts.push(`- CPU cores: ${Number.isFinite(navigator.hardwareConcurrency) ? navigator.hardwareConcurrency : 'not reported'}`);
   parts.push(`- Browser: ${navigator.userAgent}`);
