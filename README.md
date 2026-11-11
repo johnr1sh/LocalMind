@@ -132,7 +132,7 @@ A ChatGPT-style hybrid online/offline app that runs AI models locally in your br
 > The official `Qwen/Qwen2.5-0.5B-Instruct` repo has no `onnx/` folder, so it can never load in
 > Transformers.js. Old saved settings pointing at it are migrated automatically.
 
-The app defaults to SmolLM2 360M — it's the best balance of speed and quality for browser inference. First-run downloads start when the user sends a message, so the welcome screen stays usable instead of blocking behind a large model transfer. If loading fails, Browser Helper mode provides diagnostics and recovery steps.
+The app defaults to SmolLM2 135M to minimize the first download and reduce memory pressure. Settings → Model Library lets users download and keep multiple models, activate one, or remove its cached files. Only one inference pipeline is kept resident at a time. A failed model load stops generation and reports the real error; it never stores a simulated helper message as an AI answer.nce of speed and quality for browser inference. First-run downloads start when the user sends a message, so the welcome screen stays usable instead of blocking behind a large model transfer. If loading fails, Browser Helper mode provides diagnostics and recovery steps.
 
 ---
 
