@@ -499,7 +499,7 @@ async function runGeneration(convId) {
     } catch (err) {
       // Never generate or save a simulated "Browser Helper" answer as if it were AI.
       // Keep the user's message in history and stop this generation cleanly.
-      UI.setProgress({ status: 'fallback' });
+      UI.setProgress({ status: 'ready' });
       UI.showErr(`Local model could not start. No AI response was generated. ${err.message}`, 12000);
       refreshModelBadge('error', modelId);
       document.getElementById('typing-indicator').classList.add('hidden');
@@ -558,7 +558,8 @@ async function runGeneration(convId) {
     document.getElementById('typing-indicator').classList.add('hidden');
     el.remove();
     if (AI.isLikelyMemoryError(err)) AI.resetModel();
-    UI.showErr(`Generation failed: ${err.message}`);
+    refreshModelBadge('error', modelIdForGeneration());
+    UI.showErr(`Generation failed. No simulated response was saved. ${err.message}`);
     console.error(err);
   } finally {
     clearInterval(scrollInterval);
@@ -1004,7 +1005,7 @@ function bindAll() {
       await refreshCacheChips();
     } catch (err) {
       refreshModelBadge('fallback', modelId);
-      UI.showErr(`Model retry failed. Browser Helper mode remains available. ${err.message}`, 10000);
+      UI.showErr(`Model retry failed. No AI response was generated. ${err.message}`, 12000);
     } finally {
       button.disabled = false;
       button.textContent = 'Retry Model Load';
