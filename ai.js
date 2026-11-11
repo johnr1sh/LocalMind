@@ -16,6 +16,7 @@
 export const TRANSFORMERS_VERSION = '4.3.2';
 const RUNTIME_URL = `https://cdn.jsdelivr.net/npm/@huggingface/transformers@${TRANSFORMERS_VERSION}`;
 let runtimePromise = null;
+let runtimeLoaded = false;
 let pipeline = null;
 let TextStreamer = null;
 let InterruptableStoppingCriteria = null;
@@ -30,6 +31,7 @@ async function ensureRuntime() {
       InterruptableStoppingCriteria = runtime.InterruptableStoppingCriteria;
       ModelRegistry = runtime.ModelRegistry;
       env = runtime.env;
+      runtimeLoaded = true;
       if (!pipeline || !TextStreamer || !InterruptableStoppingCriteria || !ModelRegistry || !env) {
         throw new Error('The Transformers.js runtime loaded, but required inference APIs are missing.');
       }
@@ -131,6 +133,31 @@ export const MODELS = {
 
 export const DEFAULT_MODEL = 'onnx-community/SmolLM2-135M-Instruct-ONNX';
 
+// ---- "is this model downloaded?" hint -----------------------------------------
+// The authoritative check (ModelRegistry.is_cached) needs the multi-MB Transformers.js
+// runtime. A tiny localStorage hint lets startup skip that import entirely for devices
+// with no downloaded model. It is only a hint: anything that acts on it (warm-loading,
+// downloading) still runs the real check first, and the real check refreshes it.
+const HINT_KEY = 'localmind-cached-models';
+
+function readHints() {
+  try { return JSON.parse(localStorage.getItem(HINT_KEY) || '{}') || {}; } catch { return {}; }
+}
+
+function writeHint(modelId, cached) {
+  try {
+    const hints = readHints();
+    hints[modelId] = Boolean(cached);
+    localStorage.setItem(HINT_KEY, JSON.stringify(hints));
+  } catch { /* storage may be blocked; the hint is optional */ }
+}
+
+/** true / false when known from a previous real check, null when never checked. */
+export function cachedHint(modelId) {
+  const value = readHints()[normalizeModelId(modelId)];
+  return typeof value === 'boolean' ? value : null;
+}
+
 // Old saved settings / conversations may reference ids that never worked.
 const LEGACY_IDS = {
   'Qwen/Qwen2.5-0.5B-Instruct': 'onnx-community/Qwen2.5-0.5B-Instruct',
@@ -190,7 +217,7 @@ export async function planFor(modelId) {
   return attempts;
 }
 
-export async function systemHealth(modelId = DEFAULT_MODEL) {
+export async function systemHealth(modelId = DEFAULT_MODEL, { verify = true } = {}) {
   modelId = normalizeModelId(modelId);
   const cfg = MODELS[modelId];
   let usageMB = null;
@@ -218,7 +245,7 @@ export async function systemHealth(modelId = DEFAULT_MODEL) {
   const gpu = await probeWebGPU();
   const webgpu = gpu.usable;
   const online = navigator.onLine;
-  const cached = await isCached(modelId);
+  const cached = await isCached(modelId, { verify });
   const plan = await planFor(modelId);
   const downloadMB = plan[0]?.mb ?? cfg.webgpu?.mb ?? cfg.wasm?.mb ?? 0;
   const neededStorageMB = Math.max(cfg.storageMB, downloadMB * 1.6);
@@ -519,6 +546,7 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
         pipe = candidate;
         loadedModel = modelId;
         loadedRuntime = attempt;
+        writeHint(modelId, true);
         onProgress({
           status: 'ready',
           progress: 100,
@@ -672,17 +700,23 @@ export function isLikelyMemoryError(err) { return isMemoryAllocationError(err); 
  * (The old check matched any cached URL containing the model name, so a single
  * cached config.json made a half-downloaded model look "Cached".)
  */
-export async function isCached(modelId) {
+export async function isCached(modelId, { verify = true } = {}) {
   try {
     modelId = normalizeModelId(modelId);
     if (!('caches' in self)) return false;
+    // verify:false answers from the hint when the runtime is not loaded yet, so a
+    // passive status display never forces the runtime download. Unknown -> check.
+    if (!verify && !runtimeLoaded) {
+      const hint = cachedHint(modelId);
+      if (hint !== null) return hint;
+    }
     await ensureRuntime();
     const plan = await planFor(modelId);
     const dtypes = [...new Set(plan.map(a => a.dtype))];
-    for (const dtype of dtypes) {
-      if (await ModelRegistry.is_cached(modelId, { dtype })) return true;
-    }
-    return false;
+    const results = await Promise.all(dtypes.map(dtype => ModelRegistry.is_cached(modelId, { dtype })));
+    const cached = results.some(Boolean);
+    writeHint(modelId, cached);
+    return cached;
   } catch {
     return false;
   }
@@ -707,6 +741,7 @@ export async function clearModelCache(modelId) {
     }
   }
   if (wasLoaded) loadedRuntime = null;
+  writeHint(modelId, false);
 
   return deleted;
 }

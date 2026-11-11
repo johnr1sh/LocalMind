@@ -17,8 +17,14 @@
   <link rel="stylesheet" href="styles.css" />
 
   <!-- Preconnect for faster initial load -->
-  <link rel="preconnect" href="https://cdn.jsdelivr.net" />
-  <link rel="preconnect" href="https://huggingface.co" />
+  <!-- Fetch the module graph in parallel instead of discovering it one import at a time -->
+  <link rel="modulepreload" href="app.js" />
+  <link rel="modulepreload" href="db.js" />
+  <link rel="modulepreload" href="ai.js" />
+  <link rel="modulepreload" href="ui.js" />
+  <!-- The CDN/model hosts are only needed once a model is used, so resolve DNS but do not open sockets at startup -->
+  <link rel="dns-prefetch" href="https://cdn.jsdelivr.net" />
+  <link rel="dns-prefetch" href="https://huggingface.co" />
 </head>
 <body>
 

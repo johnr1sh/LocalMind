@@ -90,7 +90,12 @@ self.addEventListener('fetch', event => {
   if (url.pathname.includes('/api/')) return;
 
   if (isHTML(request)) {
-    event.respondWith(networkFirst(request, STATIC));
+    // A deployment-versioned worker owns an immutable, fully precached shell, so serve
+    // it straight from cache: repeat loads need no network round trip, and the HTML can
+    // never disagree with the cached JS/CSS. Updates still arrive through the new worker.
+    // The unversioned fallback worker cannot make that guarantee, so it stays network-first,
+    // but with a timeout so a flaky connection cannot hold the page hostage.
+    event.respondWith(VER === 'local' ? networkFirst(request, STATIC, 3000) : shellFirst(request));
   } else if (isStatic(url)) {
     event.respondWith(cacheFirst(request, STATIC));
   }
@@ -112,9 +117,19 @@ async function cacheFirst(request, cacheName) {
   }
 }
 
-async function networkFirst(request, cacheName) {
+async function shellFirst(request) {
+  const cache = await caches.open(STATIC);
+  return (await cache.match(request, { ignoreSearch: true }))
+    || (await cache.match('./'))
+    || networkFirst(request, STATIC, 3000);
+}
+
+async function networkFirst(request, cacheName, timeoutMs = 0) {
+  const controller = timeoutMs ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : 0;
   try {
-    const response = await fetch(request, { cache: 'no-store' });
+    const response = await fetch(request, { cache: 'no-store', signal: controller?.signal });
+    clearTimeout(timer);
     // Never cache a redirected response: it cannot be served back for a navigation.
     if (response.ok && !response.redirected) {
       const cache = await caches.open(cacheName);
@@ -122,6 +137,7 @@ async function networkFirst(request, cacheName) {
     }
     return response;
   } catch {
+    clearTimeout(timer);
     const cache = await caches.open(cacheName);
     return (await cache.match(request))
       || (await cache.match('./'))

@@ -78,16 +78,21 @@ async function init() {
   // Everything below touches the Transformers.js runtime (cache checks, health),
   // which is imported from the CDN, so the service worker must control the page first.
   await swReady;
-  syncSettingsUI();
+  const modelId = AI.normalizeModelId(app.settings.model || AI.DEFAULT_MODEL);
+  // Startup only needs the cheap pieces. The per-model download list is built when the
+  // Settings dialog opens, and status comes from a local hint, so a device with no
+  // downloaded model never fetches the multi-MB inference runtime just to open the app.
+  syncSettingsUI({ chips: false, health: false });
   refreshModelBadge();
-  await refreshSystemHealth();
+  await refreshSystemHealth(modelId, { verify: false });
 
   // Warm cached models only. Avoid blocking first-run users behind a large download overlay.
-  const modelId = AI.normalizeModelId(app.settings.model || AI.DEFAULT_MODEL);
-  if (await AI.isCached(modelId)) {
+  const hint = AI.cachedHint(modelId);
+  if (hint !== false && await AI.isCached(modelId)) {
     loadModel(modelId, { showPanel: false, skipConfirm: true }).catch(() => refreshModelBadge('error', modelId));
   } else {
     refreshModelBadge('', modelId);
+    if (hint === true) refreshSystemHealth(modelId); // the hint was stale; show the real state
   }
 }
 
@@ -791,7 +796,7 @@ function closeSidebar() {
 
 // ---- settings ----
 
-function syncSettingsUI() {
+function syncSettingsUI({ chips = true, health = true } = {}) {
   const s = app.settings;
   const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
 
@@ -809,8 +814,8 @@ function syncSettingsUI() {
   if (maxVal) maxVal.textContent = s.maxTokens ?? 512;
   if (topVal) topVal.textContent = parseFloat(s.topP ?? 0.9).toFixed(2);
 
-  refreshCacheChips();
-  refreshSystemHealth(s.model || AI.DEFAULT_MODEL);
+  if (chips) refreshCacheChips();
+  if (health) refreshSystemHealth(s.model || AI.DEFAULT_MODEL);
 }
 
 async function saveSettings() {
@@ -844,10 +849,13 @@ async function saveSettings() {
 async function refreshCacheChips() {
   const el = document.getElementById('model-cache-status');
   if (!el) return;
+  const entries = Object.entries(AI.MODELS);
+  // Check every model at once instead of one after another.
+  const cachedStates = await Promise.all(entries.map(([id]) => AI.isCached(id)));
   el.innerHTML = '';
 
-  for (const [id, info] of Object.entries(AI.MODELS)) {
-    const cached = await AI.isCached(id);
+  for (const [index, [id, info]] of entries.entries()) {
+    const cached = cachedStates[index];
     const chip = document.createElement('div');
     chip.className = 'model-cache-chip';
 
@@ -917,8 +925,8 @@ async function refreshCacheChips() {
   }
 }
 
-async function refreshSystemHealth(modelId = app.settings.model || AI.DEFAULT_MODEL) {
-  const health = await AI.systemHealth(AI.normalizeModelId(modelId));
+async function refreshSystemHealth(modelId = app.settings.model || AI.DEFAULT_MODEL, { verify = true } = {}) {
+  const health = await AI.systemHealth(AI.normalizeModelId(modelId), { verify });
   app.lastHealth = health;
 
   const welcome = document.getElementById('welcome-system-health');
