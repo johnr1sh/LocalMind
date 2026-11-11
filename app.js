@@ -829,7 +829,10 @@ async function refreshCacheChips() {
         const ok = await UI.confirmDlg('Remove model', `Delete the downloaded files for ${info.name}? Your conversations will remain.`, 'Remove');
         if (!ok) return;
         try {
+          const wasActive = AI.getModelId() === id;
           await AI.clearModelCache(id);
+          if (wasActive) refreshModelBadge('', id);
+          await refreshSystemHealth(id);
           await refreshCacheChips();
           UI.showOk(`${info.name} download removed.`);
         } catch (err) {
