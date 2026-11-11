@@ -16,6 +16,7 @@ const app = {
   msgs: [],
   settings: {},
   generating: false,
+  modelOperation: false,
   query: '',
   lastHealth: null,
   searchMatches: null,
@@ -638,17 +639,23 @@ function safeGenerationOptions(modelId, opts) {
 }
 
 async function loadModel(id, { showPanel = true, skipConfirm = false } = {}) {
-  const health = await ensureModelSafeToLoad(id, { skipConfirm });
-  refreshModelBadge('loading', id);
-  if (showPanel) UI.setProgress({ status: 'initiate', modelName: health.modelName, downloadMB: health.downloadMB, health });
-  await AI.loadModel(id, progress => {
-    const withHealth = { ...progress, modelName: health.modelName, downloadMB: health.downloadMB, health };
-    if (showPanel) UI.setProgress(withHealth);
-    if (progress.status === 'ready') {
-      refreshModelBadge('ready', id);
-      refreshSystemHealth(id);
-    }
-  });
+  if (app.modelOperation) throw new Error('Another model operation is already running. Wait for it to finish.');
+  app.modelOperation = true;
+  try {
+    const health = await ensureModelSafeToLoad(id, { skipConfirm });
+    refreshModelBadge('loading', id);
+    if (showPanel) UI.setProgress({ status: 'initiate', modelName: health.modelName, downloadMB: health.downloadMB, health });
+    await AI.loadModel(id, progress => {
+      const withHealth = { ...progress, modelName: health.modelName, downloadMB: health.downloadMB, health };
+      if (showPanel) UI.setProgress(withHealth);
+      if (progress.status === 'ready') {
+        refreshModelBadge('ready', id);
+        refreshSystemHealth(id);
+      }
+    });
+  } finally {
+    app.modelOperation = false;
+  }
 }
 
 
@@ -792,9 +799,9 @@ async function refreshCacheChips() {
     useButton.type = 'button';
     useButton.className = 'btn btn-ghost btn-sm';
     useButton.textContent = cached ? 'Use' : 'Download';
-    useButton.disabled = app.generating;
+    useButton.disabled = app.generating || app.modelOperation;
     useButton.addEventListener('click', async () => {
-      if (app.generating) return;
+      if (app.generating || app.modelOperation) return;
       useButton.disabled = true;
       useButton.textContent = cached ? 'Loading…' : 'Downloading…';
       try {
@@ -819,9 +826,9 @@ async function refreshCacheChips() {
       removeButton.type = 'button';
       removeButton.className = 'btn btn-ghost btn-sm';
       removeButton.textContent = 'Remove';
-      removeButton.disabled = app.generating;
+      removeButton.disabled = app.generating || app.modelOperation;
       removeButton.addEventListener('click', async () => {
-        if (app.generating) return;
+        if (app.generating || app.modelOperation) return;
         const ok = await UI.confirmDlg('Remove model', `Delete the downloaded files for ${info.name}? Your conversations will remain.`, 'Remove');
         if (!ok) return;
         try {
@@ -1010,7 +1017,7 @@ function bindAll() {
 
   $('retry-model-btn').addEventListener('click', async () => {
     const button = $('retry-model-btn');
-    if (app.generating || button.disabled) return;
+    if (app.generating || app.modelOperation || button.disabled) return;
     const modelId = AI.normalizeModelId($('model-select')?.value || app.settings.model || AI.DEFAULT_MODEL);
     button.disabled = true;
     button.textContent = 'Retrying…';
@@ -1047,6 +1054,7 @@ function bindAll() {
   });
 
   $('clear-cache-btn').addEventListener('click', async () => {
+    if (app.generating || app.modelOperation) return;
     const ok = await UI.confirmDlg('Clear Cache', 'Remove all downloaded model files?', 'Clear Cache');
     if (!ok) return;
     try {
