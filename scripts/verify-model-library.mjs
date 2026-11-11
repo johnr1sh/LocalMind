@@ -40,12 +40,20 @@ assert.match(ai, /candidate\('Hello\.'/,
 assert.doesNotMatch(ai, /generateFallback|generateMemoryFallback/,
   'Model failures must not be replaced by simulated assistant responses.');
 
-assert.match(app, /await registerSW\(\)/, 'Register the worker before runtime/model initialization.');
+assert.match(app, /swReady = registerSW\(\)/, 'Register the worker at startup.');
+assert.ok(app.indexOf('await swReady;') > 0
+  && app.indexOf('await swReady;') < app.indexOf('await AI.isCached(modelId)'),
+  'Runtime/model cache checks must wait for the worker, but the first paint must not.');
+assert.doesNotMatch(app, /\n\s*AI\.resetModel\(\);/, 'resetModel() is async and must be awaited.');
 assert.match(app, /No AI response was generated/, 'Model-load failures must stop the current turn.');
 assert.match(app, /model-cache-chip-actions/, 'Model library must expose download/use/remove controls.');
 
-assert.match(worker, /lm-runtime-transformers-4-3-0/,
-  'The pinned ONNX runtime cache must survive app deployments.');
+const runtimeVersion = ai.match(/TRANSFORMERS_VERSION = '(\d+\.\d+\.\d+)'/)?.[1];
+assert.ok(runtimeVersion, 'ai.js must declare TRANSFORMERS_VERSION.');
+assert.ok(worker.includes(`transformers-${runtimeVersion.replaceAll('.', '-')}`),
+  'The worker runtime cache name must match TRANSFORMERS_VERSION so the pinned runtime survives deployments.');
+assert.doesNotMatch(worker, /PRECACHE = \[[^\]]*index\.html/,
+  'Do not precache ./index.html: cleanUrls redirects it and redirected responses break navigations.');
 assert.match(worker, /url\.hostname === 'cdn\.jsdelivr\.net'/,
   'Cache the full jsDelivr npm dependency graph for offline runtime startup.');
 
