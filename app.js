@@ -119,16 +119,34 @@ let versionPollTimer = null;
 
 async function fetchDeploymentVersion() {
   if (!navigator.onLine) return null;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
   try {
-    const response = await fetch(new URL('./api/version', document.baseURI), {
+    const url = new URL('./api/version', document.baseURI);
+    // A unique query string also avoids stale intermediary responses on hosts
+    // that do not fully honor no-store for serverless metadata endpoints.
+    url.searchParams.set('_check', String(Date.now()));
+    const response = await fetch(url, {
       cache: 'no-store',
       headers: { Accept: 'application/json' },
+      signal: controller.signal,
     });
     if (!response.ok) throw new Error(`Version endpoint returned HTTP ${response.status}`);
-    return await response.json();
+
+    const payload = await response.json();
+    if (!payload || typeof payload !== 'object'
+      || typeof payload.commit !== 'string'
+      || !/^(local|[a-f0-9]{7,40})$/i.test(payload.commit)) {
+      throw new Error('Version endpoint returned invalid deployment metadata');
+    }
+    return payload;
   } catch (err) {
-    console.warn('[Version] latest deployment check failed:', err);
+    const reason = err?.name === 'AbortError' ? 'request timed out after 8 seconds' : err.message;
+    console.warn('[Version] latest deployment check failed:', reason);
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -223,23 +241,37 @@ async function registerWorkerForVersion(commit = null) {
   return registration;
 }
 
+let versionCheckPromise = null;
+
 async function checkForUpdates() {
-  updateConnectivityUI();
-  const [latest, running] = await Promise.all([
-    fetchDeploymentVersion(),
-    getWorkerVersion(),
-  ]);
-  const outdated = renderVersionStatus(running, latest);
-  if (!navigator.onLine) {
-    const state = document.getElementById('app-version-state');
-    if (state) state.textContent = running
-      ? 'Offline mode · Running cached application'
-      : 'Offline mode · Waiting for cached application control';
-  } else if (outdated) {
-    document.getElementById('update-toast')?.classList.remove('hidden');
-    swRegistration?.update().catch(err => console.warn('[SW] update check failed:', err));
+  // Startup, tab-focus, reconnect, and manual checks can happen together.
+  // Share one request so they cannot race the version panel or worker update.
+  if (versionCheckPromise) return versionCheckPromise;
+
+  versionCheckPromise = (async () => {
+    updateConnectivityUI();
+    const [latest, running] = await Promise.all([
+      fetchDeploymentVersion(),
+      getWorkerVersion(),
+    ]);
+    const outdated = renderVersionStatus(running, latest);
+    if (!navigator.onLine) {
+      const state = document.getElementById('app-version-state');
+      if (state) state.textContent = running
+        ? 'Offline mode · Running cached application'
+        : 'Offline mode · Waiting for cached application control';
+    } else if (outdated) {
+      document.getElementById('update-toast')?.classList.remove('hidden');
+      swRegistration?.update().catch(err => console.warn('[SW] update check failed:', err));
+    }
+    return { latest, running, outdated };
+  })();
+
+  try {
+    return await versionCheckPromise;
+  } finally {
+    versionCheckPromise = null;
   }
-  return { latest, running, outdated };
 }
 
 async function handleConnectionRestored() {

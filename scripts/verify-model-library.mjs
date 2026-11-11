@@ -51,4 +51,12 @@ assert.match(worker, /url\.hostname === 'cdn\.jsdelivr\.net'/,
 
 JSON.parse(vercel);
 JSON.parse(manifest);
+
+assert.match(app, /new AbortController\(\)/,
+  'Deployment metadata checks must have a bounded network timeout.');
+assert.match(app, /versionCheckPromise/,
+  'Concurrent deployment checks must share one in-flight request.');
+assert.match(app, /invalid deployment metadata/,
+  'Deployment metadata must be validated before registering a versioned worker.');
+
 console.log(`LocalMind static checks passed: ${modelIds.length} model entries, selector parity, runtime lifecycle, offline cache, and JSON configuration.`);
