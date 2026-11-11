@@ -30,7 +30,23 @@ async function init() {
     return;
   }
 
-  registerSW();
+  await registerSW();
+  // Wait until the newly installed worker actually controls this document before
+  // importing the CDN-hosted inference runtime or checking model caches.
+  if ('serviceWorker' in navigator) {
+    try {
+      await navigator.serviceWorker.ready;
+      if (!navigator.serviceWorker.controller) {
+        await new Promise(resolve => {
+          const done = () => { clearTimeout(timeout); resolve(); };
+          const timeout = setTimeout(done, 3000);
+          navigator.serviceWorker.addEventListener('controllerchange', done, { once: true });
+        });
+      }
+    } catch (err) {
+      console.warn('[SW] control wait failed; online inference can still proceed:', err);
+    }
+  }
 
   app.settings = await DB.getAllSettings();
   // Older builds saved a model id that has no ONNX weights; map it to a working repo.
