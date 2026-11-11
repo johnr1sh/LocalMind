@@ -35,8 +35,8 @@
 
 <!-- ===== UPDATE NOTIFICATION TOAST ===== -->
 <div id="update-toast" class="toast hidden" role="alert" aria-live="polite">
-  <span>New version available</span>
-  <button id="update-reload-btn" class="toast-action">Reload</button>
+  <span id="update-toast-message">A new LocalMind deployment is available.</span>
+  <button id="update-reload-btn" class="toast-action">Update now</button>
   <button id="update-dismiss-btn" class="toast-dismiss" aria-label="Dismiss">×</button>
 </div>
 
@@ -268,6 +268,17 @@
     </div>
 
     <div class="modal-body">
+      <section class="settings-section">
+        <h3 class="settings-section-title">Application Version</h3>
+        <div class="app-version-panel" aria-live="polite">
+          <div class="app-version-row"><span>Running version</span><code id="app-version-current">Checking…</code></div>
+          <div class="app-version-row"><span>Latest deployment</span><code id="app-version-latest">Checking…</code></div>
+          <p id="app-version-state" class="version-status-state is-unknown">Checking deployment status…</p>
+          <p id="app-version-meta" class="app-version-meta">Deployment metadata loads when online.</p>
+        </div>
+        <button id="check-updates-btn" class="btn btn-ghost" type="button">Check for updates</button>
+      </section>
+
       <section class="settings-section">
         <h3 class="settings-section-title">Model</h3>
         <div class="form-group">

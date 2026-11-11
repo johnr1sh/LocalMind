@@ -16,6 +16,8 @@ A ChatGPT-style chat app that runs entirely in your browser. No API keys, no ser
 - **Streaming responses** — real-time token output
 - **Markdown rendering** — code blocks, lists, bold, italic, links
 - **Installable PWA** — works on Android, iOS, and desktop
+- **Deployment-aware versioning** — displays the running service-worker commit and latest Vercel deployment
+- **Optimistic app updates** — commit-versioned cache namespaces, automatic activation, reload coordination, and periodic update checks
 - **Import / export** — back up and restore conversations as JSON
 - **Dark and light themes** — with system preference detection
 - **Full-text local search** — find conversations by title or message content without sending data anywhere
@@ -182,7 +184,7 @@ npm i -g vercel
 vercel --prod
 ```
 
-The included `vercel.json` adds security headers and proper MIME types.
+The included `vercel.json` adds security headers and disables caching for the version endpoint. The `/api/version` function returns Vercel's deployment commit metadata; it does not handle chat data or model inference.
 
 ---
 
@@ -204,6 +206,10 @@ The included `vercel.json` adds security headers and proper MIME types.
 3. Tap "Add to Home Screen"
 
 ---
+
+## Deployment Version and Updates
+
+Open Settings → Application Version to compare the service worker currently controlling the page with the latest deployed commit. LocalMind checks for deployments on startup, when the tab becomes visible, and every five minutes while the app is open. New workers use a commit-specific cache, activate immediately, and trigger one coordinated reload. Model weights remain cached separately and are preserved across app updates. If the version endpoint cannot be reached, the app reports that deployment status cannot be verified and keeps the current cached version usable.
 
 ## Offline Usage
 
@@ -295,6 +301,7 @@ localmind/
 ├── service-worker.js   # PWA caching strategy
 ├── manifest.json       # PWA manifest
 ├── vercel.json         # Deployment config
+├── api/version.js      # Vercel deployment metadata endpoint
 ├── icons/              # PWA icons (PNG + SVG)
 └── README.md
 ```

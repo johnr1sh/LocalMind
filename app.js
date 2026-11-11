@@ -47,6 +47,17 @@ async function init() {
 
   bindAll();
 
+  // Preserve an unsent draft if an update reload happens while the user is typing.
+  try {
+    const draft = sessionStorage.getItem('localmind-pending-draft');
+    const input = document.getElementById('message-input');
+    if (draft && input) {
+      input.value = draft;
+      sessionStorage.removeItem('localmind-pending-draft');
+      updateSendBtn();
+    }
+  } catch { /* session storage may be unavailable in restricted browsing modes */ }
+
   const lastId = app.settings.lastConvId;
   if (lastId && app.convs.find(c => c.id === lastId)) {
     await openConv(lastId);
@@ -76,26 +87,193 @@ function supported() {
     && CSS.supports('display', 'grid');
 }
 
-// ---- service worker ----
+// ---- deployment version + service worker updates ----
 
-function registerSW() {
-  if (!('serviceWorker' in navigator)) return;
-  navigator.serviceWorker.register('./service-worker.js', {
-    scope: './',
-    // Do not let the browser's HTTP cache hide a newly deployed worker script.
-    updateViaCache: 'none',
-  })
-    .then(reg => {
-      reg.update().catch(err => console.warn('[SW] update check failed:', err));
-      reg.addEventListener('updatefound', () => {
-        reg.installing?.addEventListener('statechange', e => {
-          if (e.target.state === 'installed' && navigator.serviceWorker.controller) {
-            document.getElementById('update-toast').classList.remove('hidden');
-          }
-        });
+let swRegistration = null;
+let hadServiceWorkerController = Boolean(navigator.serviceWorker?.controller);
+let isReloadingForUpdate = false;
+let pendingUpdateReload = false;
+let versionPollTimer = null;
+
+async function fetchDeploymentVersion() {
+  try {
+    const response = await fetch(new URL('./api/version', document.baseURI), {
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) throw new Error(`Version endpoint returned HTTP ${response.status}`);
+    return await response.json();
+  } catch (err) {
+    console.warn('[Version] latest deployment check failed:', err);
+    return null;
+  }
+}
+
+function getWorkerVersion(worker = navigator.serviceWorker?.controller) {
+  if (!worker) return Promise.resolve(null);
+  return new Promise(resolve => {
+    const channel = new MessageChannel();
+    const timeout = setTimeout(() => {
+      channel.port1.close();
+      resolve(null);
+    }, 1800);
+    channel.port1.onmessage = event => {
+      clearTimeout(timeout);
+      channel.port1.close();
+      resolve(event.data?.version || null);
+    };
+    try {
+      worker.postMessage({ type: 'GET_VERSION' }, [channel.port2]);
+    } catch {
+      clearTimeout(timeout);
+      channel.port1.close();
+      resolve(null);
+    }
+  });
+}
+
+function renderVersionStatus(running, latest, detail = '') {
+  const currentEl = document.getElementById('app-version-current');
+  const latestEl = document.getElementById('app-version-latest');
+  const stateEl = document.getElementById('app-version-state');
+  if (!currentEl || !latestEl || !stateEl) return;
+
+  currentEl.textContent = running ? running.slice(0, 12) : 'Not yet controlled';
+  latestEl.textContent = latest?.commit ? latest.commit.slice(0, 12) : 'Unavailable';
+  const currentCommit = running?.toLowerCase();
+  const latestCommit = latest?.commit?.toLowerCase();
+  const outdated = Boolean(currentCommit && latestCommit && currentCommit !== latestCommit);
+
+  stateEl.className = `version-status-state ${outdated ? 'is-outdated' : latestCommit ? 'is-current' : 'is-unknown'}`;
+  stateEl.textContent = outdated
+    ? 'Update available — applying'
+    : latestCommit && currentCommit
+      ? 'Running latest deployment'
+      : latestCommit
+        ? 'Waiting for service worker'
+        : 'Cannot verify while offline';
+  const meta = document.getElementById('app-version-meta');
+  if (meta) {
+    const details = [
+      latest?.environment || 'unknown environment',
+      latest?.branch || null,
+      latest?.deploymentId ? `deployment ${latest.deploymentId.slice(0, 10)}` : null,
+      detail || null,
+    ].filter(Boolean);
+    meta.textContent = details.join(' · ');
+  }
+  return outdated;
+}
+
+async function checkForUpdates() {
+  const [latest, running] = await Promise.all([
+    fetchDeploymentVersion(),
+    getWorkerVersion(),
+  ]);
+  const outdated = renderVersionStatus(running, latest);
+  if (outdated) {
+    document.getElementById('update-toast')?.classList.remove('hidden');
+    swRegistration?.update().catch(err => console.warn('[SW] update check failed:', err));
+  }
+  return { latest, running, outdated };
+}
+
+async function registerSW() {
+  const latest = await fetchDeploymentVersion();
+  if (!('serviceWorker' in navigator)) {
+    renderVersionStatus(null, latest, 'Service workers are not supported');
+    return;
+  }
+
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    // The first controller claim is an initial install. A later controller change
+    // means a new deployment has taken over; reload once to replace old JS modules.
+    if (hadServiceWorkerController && !isReloadingForUpdate) {
+      pendingUpdateReload = true;
+      const message = document.getElementById('update-toast-message');
+      if (message) {
+        message.textContent = app.generating
+          ? 'Update ready. It will apply after the current response finishes.'
+          : 'Update installed. Reloading LocalMind…';
+      }
+      reloadForUpdateWhenSafe();
+      return;
+    }
+    hadServiceWorkerController = true;
+    checkForUpdates();
+  });
+
+  try {
+    // The commit SHA in the script URL is the automatic build identifier.
+    // Changing it makes the browser install a distinct worker and cache namespace.
+    const workerUrl = latest?.commit
+      ? `./service-worker.js?v=${encodeURIComponent(latest.commit)}`
+      : './service-worker.js';
+
+    swRegistration = await navigator.serviceWorker.register(workerUrl, {
+      scope: './',
+      updateViaCache: 'none',
+    });
+
+    swRegistration.addEventListener('updatefound', () => {
+      const installing = swRegistration.installing;
+      installing?.addEventListener('statechange', () => {
+        if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+          document.getElementById('update-toast')?.classList.remove('hidden');
+          checkForUpdates();
+        }
       });
-    })
-    .catch(err => console.warn('SW register failed:', err));
+    });
+
+    await swRegistration.update().catch(err => console.warn('[SW] update check failed:', err));
+    await checkForUpdates();
+
+    if (versionPollTimer) clearInterval(versionPollTimer);
+    versionPollTimer = setInterval(() => {
+      if (!document.hidden) checkForUpdates();
+    }, 5 * 60 * 1000);
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) checkForUpdates();
+    });
+  } catch (err) {
+    console.warn('[SW] register failed:', err);
+    renderVersionStatus(null, latest, 'Service worker registration failed');
+  }
+}
+
+function reloadForUpdateWhenSafe() {
+  if (!pendingUpdateReload || isReloadingForUpdate || app.generating) return;
+  const input = document.getElementById('message-input');
+  try {
+    if (input?.value) sessionStorage.setItem('localmind-pending-draft', input.value);
+  } catch { /* continue with the update even when session storage is unavailable */ }
+  isReloadingForUpdate = true;
+  location.reload();
+}
+
+async function activateAvailableUpdate() {
+  if (swRegistration?.waiting) {
+    swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
+    return;
+  }
+  const button = document.getElementById('check-updates-btn');
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Checking…';
+  }
+  try {
+    const result = await checkForUpdates();
+    if (!result.outdated) {
+      const state = document.getElementById('app-version-state');
+      if (state) state.textContent = result.latest ? 'Already up to date' : 'Could not reach deployment';
+    }
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Check for updates';
+    }
+  }
 }
 
 // ---- theme ----
@@ -329,6 +507,7 @@ async function runGeneration(convId) {
     setInputEnabled(true);
     document.getElementById('typing-indicator').classList.add('hidden');
     UI.scrollBottom();
+    reloadForUpdateWhenSafe();
   }
 }
 
@@ -762,7 +941,8 @@ function bindAll() {
     searchTimer = setTimeout(() => searchConversations(app.query), 120);
   });
 
-  $('update-reload-btn').addEventListener('click', () => location.reload());
+  $('update-reload-btn').addEventListener('click', activateAvailableUpdate);
+  $('check-updates-btn').addEventListener('click', activateAvailableUpdate);
   $('update-dismiss-btn').addEventListener('click', () => $('update-toast').classList.add('hidden'));
   $('error-toast-close').addEventListener('click', () => $('error-toast').classList.add('hidden'));
   $('cancel-load-btn').addEventListener('click', () => UI.setProgress({ status: 'ready' }));
