@@ -376,14 +376,16 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
   const cfg = MODELS[modelId];
   if (!cfg) throw new Error(`Unknown model: ${modelId}`);
 
-  await ensureRuntime();
-  setupEnv();
+  // Set the lock before any asynchronous runtime import. Two rapid requests
+  // must never initialize two ONNX sessions in parallel.
   loading = true;
   loadingModel = modelId;
   fallbackMode = false;
   lastError = null;
 
   loadingPromise = (async () => {
+    await ensureRuntime();
+    setupEnv();
     let attempts = await planFor(modelId);
 
     // Before a first download, ask the Hub which ONNX quantizations really exist.
