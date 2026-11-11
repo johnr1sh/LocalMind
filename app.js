@@ -661,11 +661,7 @@ function refreshModelBadge(status = 'loading', id = null) {
   const info = AI.MODELS[mid];
 
   dot.className = `model-badge-dot ${status}`;
-  if (status === 'fallback') {
-    name.textContent = 'Browser Helper Mode';
-  } else {
-    name.textContent = info ? info.name : mid.split('/')[1];
-  }
+  name.textContent = info ? info.name : mid.split('/')[1];
 }
 
 // ---- input state ----
@@ -1024,7 +1020,7 @@ function bindAll() {
       UI.showOk(`${AI.MODELS[modelId]?.name || 'Model'} loaded successfully.`);
       await refreshCacheChips();
     } catch (err) {
-      refreshModelBadge('fallback', modelId);
+      refreshModelBadge('error', modelId);
       UI.showErr(`Model retry failed. No AI response was generated. ${err.message}`, 12000);
     } finally {
       button.disabled = false;
