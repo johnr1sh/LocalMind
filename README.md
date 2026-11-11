@@ -255,6 +255,12 @@ The export format is versioned (`"version": 1`) for forward compatibility.
 - Try a different network (some corporate proxies block HuggingFace)
 - The model caches after the first download — subsequent loads are instant
 
+**"std::bad_alloc", "Can't create a session", or "ERROR_CODE: 6" during model load**
+- This is an ONNX Runtime memory-allocation failure, not a browser storage-quota error. Model files may fit in Cache Storage while the runtime still cannot reserve enough working memory.
+- Close memory-heavy tabs and applications, fully restart Chrome/Edge, keep SmolLM2 360M selected, then use Settings → Retry Model Load.
+- LocalMind uses one WASM thread during initialization to reduce temporary memory pressure. If the browser has a usable WebGPU adapter, enable hardware acceleration and restart the browser so LocalMind can prefer the GPU backend.
+- The `/browser` diagnostic now distinguishes WebGPU API presence from a successfully-created adapter. A present API alone does not guarantee that WebGPU inference can start.
+
 **"Out of memory" or "Array buffer allocation failed" error**
 - Try a smaller model (SmolLM2 360M is the most memory-efficient)
 - Close other browser tabs/apps to free RAM and then reload LocalMind
