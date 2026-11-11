@@ -51,7 +51,13 @@ self.addEventListener('fetch', event => {
   const request = event.request;
   const url = new URL(request.url);
 
-  if (request.method !== 'GET' || url.origin !== self.location.origin) return;
+  if (request.method !== 'GET') return;
+  // Keep the Transformers.js runtime available offline after it has been fetched.
+  if (isCDN(url)) {
+    event.respondWith(cacheFirst(request, RUNTIME));
+    return;
+  }
+  if (url.origin !== self.location.origin) return;
   // Version metadata must always reach the deployment endpoint, never a stale SW cache.
   if (url.pathname.includes('/api/')) return;
 
@@ -125,3 +131,7 @@ self.addEventListener('message', event => {
     });
   }
 });
+
+function isCDN(url) {
+  return url.href.includes('cdn.jsdelivr.net/npm/@huggingface');
+}
