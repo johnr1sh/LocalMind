@@ -47,6 +47,17 @@ async function init() {
 
   bindAll();
 
+  // Preserve an unsent draft if an update reload happens while the user is typing.
+  try {
+    const draft = sessionStorage.getItem('localmind-pending-draft');
+    const input = document.getElementById('message-input');
+    if (draft && input) {
+      input.value = draft;
+      sessionStorage.removeItem('localmind-pending-draft');
+      updateSendBtn();
+    }
+  } catch { /* session storage may be unavailable in restricted browsing modes */ }
+
   const lastId = app.settings.lastConvId;
   if (lastId && app.convs.find(c => c.id === lastId)) {
     await openConv(lastId);
@@ -81,6 +92,7 @@ function supported() {
 let swRegistration = null;
 let hadServiceWorkerController = Boolean(navigator.serviceWorker?.controller);
 let isReloadingForUpdate = false;
+let pendingUpdateReload = false;
 let versionPollTimer = null;
 
 async function fetchDeploymentVersion() {
@@ -177,13 +189,14 @@ async function registerSW() {
     // The first controller claim is an initial install. A later controller change
     // means a new deployment has taken over; reload once to replace old JS modules.
     if (hadServiceWorkerController && !isReloadingForUpdate) {
-      isReloadingForUpdate = true;
-      const toast = document.getElementById('update-toast');
-      if (toast) {
-        const message = document.getElementById('update-toast-message');
-        if (message) message.textContent = 'Update installed. Reloading LocalMind…';
+      pendingUpdateReload = true;
+      const message = document.getElementById('update-toast-message');
+      if (message) {
+        message.textContent = app.generating
+          ? 'Update ready. It will apply after the current response finishes.'
+          : 'Update installed. Reloading LocalMind…';
       }
-      location.reload();
+      reloadForUpdateWhenSafe();
       return;
     }
     hadServiceWorkerController = true;
@@ -227,6 +240,16 @@ async function registerSW() {
     console.warn('[SW] register failed:', err);
     renderVersionStatus(null, latest, 'Service worker registration failed');
   }
+}
+
+function reloadForUpdateWhenSafe() {
+  if (!pendingUpdateReload || isReloadingForUpdate || app.generating) return;
+  const input = document.getElementById('message-input');
+  try {
+    if (input?.value) sessionStorage.setItem('localmind-pending-draft', input.value);
+  } catch { /* continue with the update even when session storage is unavailable */ }
+  isReloadingForUpdate = true;
+  location.reload();
 }
 
 async function activateAvailableUpdate() {
@@ -484,6 +507,7 @@ async function runGeneration(convId) {
     setInputEnabled(true);
     document.getElementById('typing-indicator').classList.add('hidden');
     UI.scrollBottom();
+    reloadForUpdateWhenSafe();
   }
 }
 
