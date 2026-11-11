@@ -2,8 +2,8 @@
  * ai.js
  * Local inference via Transformers.js. Handles model load, generation, streaming.
  * Includes resilient model loading with shared in-flight requests, backend/dtype
- * fallback, aggregate progress, diagnostics, and a browser-helper fallback so
- * users are never trapped behind a failed model download.
+ * fallback, aggregate progress, and diagnostics so model failures are visible
+ * and never disguised as successful assistant responses.
  *
  * Every model below was checked against its Hugging Face repo: the `onnx/`
  * folder must contain `model_<dtype>.onnx` for each dtype we request, otherwise
@@ -280,7 +280,6 @@ let loadingPromise = null;
 let stopFlag = false;
 let stopper = null;
 let lastError = null;
-let fallbackMode = false;
 
 function setupEnv() {
   env.allowRemoteModels = true;
@@ -345,7 +344,7 @@ function friendlyLoadError(err, attempts) {
   let advice;
   if (isMemoryAllocationError(err)) advice = memoryRecoveryAdvice();
   else if (/404|not found|could not locate|unauthorized/i.test(message)) advice = 'The model files were not found on Hugging Face (wrong repo or dtype). Update LocalMind to the latest version.';
-  else advice = 'Check that you are online for the first download, have enough free browser storage, and are using a recent Chrome/Edge browser. You can still use Browser Helper mode for diagnostics.';
+  else advice = 'Check that you are online for the first download, have enough free browser storage, and are using a recent Chrome/Edge browser. Open /browser for device diagnostics.';
   return new Error(`Could not finish loading the local AI model. Tried ${tried}. ${message} ${advice}`);
 }
 
@@ -363,8 +362,7 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
   modelId = normalizeModelId(modelId);
 
   if (loadedModel === modelId && pipe) {
-    fallbackMode = false;
-    onProgress({ status: 'ready', progress: 100, modelId });
+      onProgress({ status: 'ready', progress: 100, modelId });
     return;
   }
 
@@ -388,9 +386,11 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
     setupEnv();
     let attempts = await planFor(modelId);
 
-    // Before a first download, ask the Hub which ONNX quantizations really exist.
-    // This prevents a stale model card or typo from becoming an endless 404 download.
-    if (navigator.onLine && typeof ModelRegistry.get_available_dtypes === 'function') {
+    // Preflight remote artifacts only when this device has no complete cached
+    // runtime/dtype. A previously downloaded model must remain usable even if its
+    // upstream repository later becomes unavailable.
+    if (navigator.onLine && attempts.length && !cacheChecks.some(Boolean)
+      && typeof ModelRegistry.get_available_dtypes === 'function') {
       try {
         const available = await ModelRegistry.get_available_dtypes(modelId);
         if (!available?.length) {
@@ -400,18 +400,19 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
         if (!attempts.length) {
           throw new Error(`No compatible quantization was found for ${modelId}. Hub offers: ${available.join(', ')}.`);
         }
+        cacheChecks = await Promise.all(attempts.map(async attempt => {
+          try { return await ModelRegistry.is_cached(modelId, { dtype: attempt.dtype }); }
+          catch { return false; }
+        }));
       } catch (err) {
         if (/404|not found|no usable ONNX|no compatible quantization|unauthorized/i.test(err?.message || '')) throw err;
-        // Network metadata can be temporarily unavailable; known-good cached assets
-        // are still allowed to load, and pipeline() will report a real fetch failure.
         console.warn('[AI] Could not preflight model artifacts:', err);
       }
     }
 
     // Reuse a fully cached backend/dtype first. This is essential offline and
-    // avoids downloading a second quantization when the first one is already ready. This is essential offline and
     // avoids downloading a second quantization when the first one is already ready.
-    const cacheChecks = await Promise.all(attempts.map(async attempt => {
+    let cacheChecks = await Promise.all(attempts.map(async attempt => {
       try { return await ModelRegistry.is_cached(modelId, { dtype: attempt.dtype }); }
       catch { return false; }
     }));
@@ -422,7 +423,9 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
 
     if (!orderedAttempts.length) {
       throw friendlyLoadError(
-        new Error(`${cfg.name} needs WebGPU with shader-f16 support, which is not available here.`),
+        new Error(!cfg.wasm && cfg.webgpu
+          ? `${cfg.name} requires WebGPU with shader-f16 support, which is not available here.`
+          : `No compatible runtime is available for ${cfg.name} on this device.`),
         orderedAttempts,
       );
     }
@@ -485,8 +488,7 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
         pipe = candidate;
         loadedModel = modelId;
         loadedRuntime = attempt;
-        fallbackMode = false;
-        onProgress({
+          onProgress({
           status: 'ready',
           progress: 100,
           modelId,
@@ -603,7 +605,6 @@ export function stop() {
   try { stopper?.interrupt(); } catch { /* ignore */ }
 }
 export function isLoaded() { return pipe !== null && loadedModel !== null; }
-export function isFallback() { return fallbackMode; }
 export function getModelId() { return loadedModel; }
 export function getRuntime() { return loadedRuntime; }
 export function isLoading() { return loading; }
@@ -614,7 +615,6 @@ export async function resetModel() {
   loading = false;
   loadingModel = null;
   loadingPromise = null;
-  fallbackMode = true;
 }
 export function isLikelyMemoryError(err) { return isMemoryAllocationError(err); }
 
