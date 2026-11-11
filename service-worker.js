@@ -133,5 +133,8 @@ self.addEventListener('message', event => {
 });
 
 function isCDN(url) {
-  return url.href.includes('cdn.jsdelivr.net/npm/@huggingface');
+  // Transformers.js pulls ONNX Runtime and WASM helpers from sibling npm
+  // packages on jsDelivr. Cache the full npm dependency graph, not only the
+  // top-level Hugging Face package, so the runtime can boot offline later.
+  return url.hostname === 'cdn.jsdelivr.net' && url.pathname.includes('/npm/');
 }
