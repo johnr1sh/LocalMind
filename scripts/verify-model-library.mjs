@@ -23,6 +23,18 @@ for (const id of modelIds) {
 assert.match(ai, /import\(RUNTIME_URL\)/, 'Inference runtime must load lazily after service-worker control.');
 assert.doesNotMatch(ai, /from ['"]https:\/\/cdn\.jsdelivr\.net/, 'Do not statically import the CDN runtime.');
 assert.match(ai, /ModelRegistry\.get_available_dtypes/, 'Validate model quantizations before first download.');
+
+const loadModelStart = ai.indexOf('export async function loadModel');
+const generateStart = ai.indexOf('export async function generate', loadModelStart);
+assert.ok(loadModelStart >= 0 && generateStart > loadModelStart, 'Could not locate loadModel implementation.');
+const loadModelSource = ai.slice(loadModelStart, generateStart);
+const cacheDeclaration = loadModelSource.indexOf('let cacheChecks =');
+const cachePreflightRead = loadModelSource.indexOf('!cacheChecks.some(Boolean)');
+assert.ok(cacheDeclaration >= 0 && cacheDeclaration < cachePreflightRead,
+  'cacheChecks must be initialized before the online preflight reads it.');
+assert.equal((loadModelSource.match(/let cacheChecks\s*=/g) || []).length, 1,
+  'cacheChecks must have one declaration; later cache checks must reassign it.');
+
 assert.match(ai, /candidate\('Hello\.'/,
   'A real generation smoke test must pass before a model is marked ready.');
 assert.doesNotMatch(ai, /generateFallback|generateMemoryFallback/,
