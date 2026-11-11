@@ -2,7 +2,7 @@
  * Exposes deployment metadata only; no user or model data is returned.
  * Vercel injects these values for each deployment automatically.
  */
-export default function handler(_request, response) {
+module.exports = function handler(_request, response) {
   const commit = process.env.VERCEL_GIT_COMMIT_SHA || 'local';
   const shortCommit = commit === 'local' ? 'local' : commit.slice(0, 12);
 
