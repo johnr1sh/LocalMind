@@ -360,8 +360,30 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
   lastError = null;
 
   loadingPromise = (async () => {
-    const attempts = await planFor(modelId);
+    let attempts = await planFor(modelId);
+
+    // Before a first download, ask the Hub which ONNX quantizations really exist.
+    // This prevents a stale model card or typo from becoming an endless 404 download.
+    if (navigator.onLine && typeof ModelRegistry.get_available_dtypes === 'function') {
+      try {
+        const available = await ModelRegistry.get_available_dtypes(modelId);
+        if (!available?.length) {
+          throw new Error(`The model repository ${modelId} has no usable ONNX text-generation weights.`);
+        }
+        attempts = attempts.filter(attempt => available.includes(attempt.dtype));
+        if (!attempts.length) {
+          throw new Error(`No compatible quantization was found for ${modelId}. Hub offers: ${available.join(', ')}.`);
+        }
+      } catch (err) {
+        if (/404|not found|no usable ONNX|no compatible quantization|unauthorized/i.test(err?.message || '')) throw err;
+        // Network metadata can be temporarily unavailable; known-good cached assets
+        // are still allowed to load, and pipeline() will report a real fetch failure.
+        console.warn('[AI] Could not preflight model artifacts:', err);
+      }
+    }
+
     // Reuse a fully cached backend/dtype first. This is essential offline and
+    // avoids downloading a second quantization when the first one is already ready. This is essential offline and
     // avoids downloading a second quantization when the first one is already ready.
     const cacheChecks = await Promise.all(attempts.map(async attempt => {
       try { return await ModelRegistry.is_cached(modelId, { dtype: attempt.dtype }); }
