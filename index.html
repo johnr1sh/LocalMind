@@ -135,7 +135,7 @@
           </svg>
         </div>
         <h1 class="welcome-title">LocalMind</h1>
-        <p class="welcome-subtitle">AI that runs entirely in your browser.<br/>Private, offline, and free — with a browser helper if model setup fails.</p>
+        <p class="welcome-subtitle">Your private AI workspace. Use it online or offline with a downloaded local model.</p>
 
         <div class="welcome-model-status" id="welcome-model-status">
           <div class="model-badge" id="model-badge">
@@ -143,6 +143,7 @@
             <span id="model-badge-name">Loading…</span>
           </div>
         </div>
+        <p id="connection-status" class="connection-status is-online" role="status">Checking connection…</p>
 
         <div id="welcome-system-health" class="system-health" aria-live="polite"></div>
 
@@ -275,6 +276,7 @@
           <div class="app-version-row"><span>Latest deployment</span><code id="app-version-latest">Checking…</code></div>
           <p id="app-version-state" class="version-status-state is-unknown">Checking deployment status…</p>
           <p id="app-version-meta" class="app-version-meta">Deployment metadata loads when online.</p>
+          <p id="settings-connection-status" class="connection-status is-online" role="status">Checking connection…</p>
         </div>
         <button id="check-updates-btn" class="btn btn-ghost" type="button">Check for updates</button>
       </section>
