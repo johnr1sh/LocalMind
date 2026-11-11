@@ -26,34 +26,54 @@ import {
  * `mb` is the real download size of that file set (weights + external data).
  */
 export const MODELS = {
+  'onnx-community/SmolLM2-135M-Instruct-ONNX': {
+    name: 'SmolLM2 135M',
+    desc: 'Ultra-light starter model for low-memory devices',
+    size: '117MB WebGPU / 181MB WASM',
+    storageMB: 360,
+    runtimeMB: 650,
+    minDeviceMemoryGB: 3,
+    recommendedDeviceMemoryGB: 4,
+    webgpu: { dtype: 'q4f16', mb: 117, noF16Dtype: 'q4', noF16Mb: 181 },
+    wasm: { dtype: 'q4', mb: 181 },
+  },
   'HuggingFaceTB/SmolLM2-360M-Instruct': {
     name: 'SmolLM2 360M',
-    desc: 'Fast, lightweight — safest first download for most browsers',
-    size: '~300–420MB download',
+    desc: 'Lightweight general-purpose assistant',
+    size: '273MB WebGPU / 388MB WASM',
     storageMB: 700,
     runtimeMB: 1200,
     minDeviceMemoryGB: 4,
     recommendedDeviceMemoryGB: 8,
-    webgpu: { dtype: 'q4f16', mb: 300, noF16Dtype: 'q4', noF16Mb: 420 },
-    wasm: { dtype: 'q4', mb: 420 },
+    webgpu: { dtype: 'q4f16', mb: 273, noF16Dtype: 'q4', noF16Mb: 388 },
+    wasm: { dtype: 'q4', mb: 388 },
   },
-  // NOTE: the official Qwen/ repo has NO onnx/ folder (404). onnx-community has it.
   'onnx-community/Qwen2.5-0.5B-Instruct': {
     name: 'Qwen2.5 0.5B',
-    desc: 'More capable, still reasonable on modern laptops',
-    size: '~485–515MB download',
-    storageMB: 900,
-    runtimeMB: 1600,
+    desc: 'Stronger multilingual assistant for supported devices',
+    size: '483MB WebGPU / 786MB WASM',
+    storageMB: 1200,
+    runtimeMB: 1700,
     minDeviceMemoryGB: 6,
     recommendedDeviceMemoryGB: 8,
-    webgpu: { dtype: 'q4f16', mb: 485 },
-    wasm: { dtype: 'q8', mb: 515 },
+    webgpu: { dtype: 'q4f16', mb: 483, noF16Dtype: 'q4', noF16Mb: 786 },
+    wasm: { dtype: 'q4', mb: 786 },
   },
-  // This repo only ships model_q4f16.onnx (+ .onnx_data) => WebGPU with shader-f16 only.
+  'onnx-community/Qwen2.5-1.5B-Instruct': {
+    name: 'Qwen2.5 1.5B',
+    desc: 'Higher quality; requires more memory and storage',
+    size: '1.22GB WebGPU / 1.79GB WASM',
+    storageMB: 2600,
+    runtimeMB: 3600,
+    minDeviceMemoryGB: 8,
+    recommendedDeviceMemoryGB: 12,
+    webgpu: { dtype: 'q4f16', mb: 1249, noF16Dtype: 'q4', noF16Mb: 1833 },
+    wasm: { dtype: 'q4', mb: 1833 },
+  },
   'onnx-community/Phi-3.5-mini-instruct-onnx-web': {
     name: 'Phi-3.5 Mini',
-    desc: 'Largest local model — WebGPU only, needs lots of free storage/RAM',
-    size: '~2.3GB download (WebGPU only)',
+    desc: 'Advanced large model; WebGPU with shader-f16 required',
+    size: '~2.3GB WebGPU only',
     storageMB: 3600,
     runtimeMB: 3500,
     minDeviceMemoryGB: 8,
@@ -63,7 +83,7 @@ export const MODELS = {
   },
 };
 
-export const DEFAULT_MODEL = 'HuggingFaceTB/SmolLM2-360M-Instruct';
+export const DEFAULT_MODEL = 'onnx-community/SmolLM2-135M-Instruct-ONNX';
 
 // Old saved settings / conversations may reference ids that never worked.
 const LEGACY_IDS = {
@@ -243,6 +263,7 @@ function setupEnv() {
   env.allowRemoteModels = true;
   env.allowLocalModels = false;
   env.useBrowserCache = true;
+  env.useWasmCache = true;
 
   // Static no-build app: keep ONNX Runtime on the main thread. Multi-threaded WASM
   // needs SharedArrayBuffer, i.e. cross-origin isolation, which this host does not
@@ -340,12 +361,21 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
 
   loadingPromise = (async () => {
     const attempts = await planFor(modelId);
+    // Reuse a fully cached backend/dtype first. This is essential offline and
+    // avoids downloading a second quantization when the first one is already ready.
+    const cacheChecks = await Promise.all(attempts.map(async attempt => {
+      try { return await ModelRegistry.is_cached(modelId, { dtype: attempt.dtype }); }
+      catch { return false; }
+    }));
+    const orderedAttempts = attempts.map((attempt, index) => ({ attempt, cached: cacheChecks[index] }))
+      .sort((a, b) => Number(b.cached) - Number(a.cached))
+      .map(item => item.attempt);
     const failures = [];
 
-    if (!attempts.length) {
+    if (!orderedAttempts.length) {
       throw friendlyLoadError(
         new Error(`${cfg.name} needs WebGPU with shader-f16 support, which is not available here.`),
-        attempts,
+        orderedAttempts,
       );
     }
 
@@ -353,14 +383,14 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
       status: 'initiate',
       progress: 0,
       modelId,
-      text: `Preparing ${cfg.name}. ${attempts.length} compatible runtime(s) available.`,
+      text: `Preparing ${cfg.name}. ${orderedAttempts.length} compatible runtime(s) available.`,
     });
 
     // Free the previous model's weights/session before allocating another.
     await disposePipe();
 
-    for (let index = 0; index < attempts.length; index += 1) {
-      const attempt = attempts[index];
+    for (let index = 0; index < orderedAttempts.length; index += 1) {
+      const attempt = orderedAttempts[index];
       try {
         onProgress({
           status: index ? 'retry' : 'initiate',
@@ -410,7 +440,7 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
     }
 
     const details = failures.map(item => `${item.device}/${item.dtype}: ${item.message}`).join(' | ');
-    throw friendlyLoadError(new Error(details || 'No compatible inference runtime was available.'), attempts);
+    throw friendlyLoadError(new Error(details || 'No compatible inference runtime was available.'), orderedAttempts);
   })();
 
   try {
@@ -427,7 +457,7 @@ export async function generate(msgs, settings = {}, onToken = () => {}, onDone =
   stopFlag = false;
 
   if (!pipe) {
-    return generateFallback(msgs, settings, onToken, onDone);
+    throw new Error('No local AI model is loaded. Choose a compatible model and download it before generating a response.');
   }
 
   let output = '';
@@ -461,8 +491,8 @@ export async function generate(msgs, settings = {}, onToken = () => {}, onDone =
     }
     if (isMemoryAllocationError(err)) {
       lastError = err;
-      await disposePipe();           // actually release the weights, don't just drop the ref
-      return generateMemoryFallback(msgs, settings, onToken, onDone, err);
+      await disposePipe();
+      throw new Error(`Local inference ran out of memory. The model has been unloaded safely. ${memoryRecoveryAdvice()} Original error: ${err?.message || String(err)}`);
     }
     throw err;
   } finally {
@@ -471,56 +501,6 @@ export async function generate(msgs, settings = {}, onToken = () => {}, onDone =
 
   onDone(output);
   return output;
-}
-
-async function generateMemoryFallback(msgs, settings, onToken, onDone, err) {
-  fallbackMode = true;
-  const diag = await browserDiagnostics();
-  const answer = [
-    'The local model ran out of browser memory while trying to respond, so I switched to Browser Helper mode instead of crashing.',
-    '',
-    memoryRecoveryAdvice(),
-    '',
-    'Current browser diagnostics:',
-    '',
-    diag,
-    '',
-    `Original error: ${err?.message || String(err)}`,
-  ].join('\n');
-
-  for (const chunk of answer.match(/.{1,18}(\s|$)/g) || [answer]) {
-    if (stopFlag) break;
-    onToken(chunk);
-    await new Promise(r => setTimeout(r, 8));
-  }
-  onDone(answer);
-  return answer;
-}
-
-async function generateFallback(msgs, settings, onToken, onDone) {
-  fallbackMode = true;
-  const last = [...msgs].reverse().find(m => m.role === 'user')?.content || '';
-  const diag = await browserDiagnostics();
-  const lower = last.toLowerCase();
-  let answer;
-
-  if (lower.includes('download') || lower.includes('model') || lower.includes('stuck') || lower.includes('load')) {
-    answer = `I can help diagnose the model download. The local LLM is not loaded yet, so I am using Browser Helper mode.\n\n${diag}\n\nTry this:\n1. Keep this tab open and online until the first model finishes.\n2. Use SmolLM2 360M first; it is the smallest supported model.\n3. Free browser storage if quota is low, then clear the model cache in Settings and retry.\n4. Use Chrome or Edge for WebGPU acceleration; CPU/WASM fallback is slower but should still work.\n5. If a corporate/ad blocker blocks cdn.jsdelivr.net or huggingface.co, allow those domains for the first download.`;
-  } else if (lower.includes('browser') || lower.includes('storage') || lower.includes('webgpu') || lower.includes('offline')) {
-    answer = `Here is what I can see from the browser right now:\n\n${diag}\n\nI can read these browser-provided capabilities and explain what they mean. For privacy, I cannot control other tabs or browse arbitrary pages unless the app adds an explicit web-search/browser connector.`;
-  } else {
-    answer = `I am in Browser Helper mode because the local AI model is not loaded yet. I can still help with setup, browser diagnostics, and app usage.\n\n${diag}\n\nAsk me about the model download, storage, WebGPU, offline use, or open Settings to retry the model.`;
-  }
-
-  const max = Number(settings.max_new_tokens || 512) * 4;
-  answer = answer.slice(0, Math.max(500, max));
-  for (const chunk of answer.match(/.{1,18}(\s|$)/g) || [answer]) {
-    if (stopFlag) break;
-    onToken(chunk);
-    await new Promise(r => setTimeout(r, 8));
-  }
-  onDone(answer);
-  return answer;
 }
 
 export async function browserDiagnostics() {
@@ -591,28 +571,36 @@ export async function isCached(modelId) {
   }
 }
 
-export async function clearCache() {
+export async function clearModelCache(modelId) {
+  modelId = normalizeModelId(modelId);
   await disposePipe();
-  for (const [modelId, cfg] of Object.entries(MODELS)) {
-    const dtypes = new Set([
-      cfg.webgpu?.dtype, cfg.webgpu?.noF16Dtype, cfg.wasm?.dtype,
-    ].filter(Boolean));
-    for (const dtype of dtypes) {
-      try { await ModelRegistry.clear_cache(modelId, { dtype }); } catch (err) {
-        console.warn(`[AI] clear_cache failed for ${modelId}/${dtype}:`, err);
-      }
+  const cfg = MODELS[modelId];
+  const dtypes = new Set([
+    cfg.webgpu?.dtype, cfg.webgpu?.noF16Dtype, cfg.wasm?.dtype,
+  ].filter(Boolean));
+  let deleted = 0;
+  for (const dtype of dtypes) {
+    try {
+      const result = await ModelRegistry.clear_cache(modelId, { dtype });
+      deleted += Number(result?.filesDeleted || 0);
+    } catch (err) {
+      console.warn(`[AI] clear_cache failed for ${modelId}/${dtype}:`, err);
     }
   }
-  // Duplicate model copies left behind by older service workers.
+  loadedRuntime = null;
+  fallbackMode = false;
+  return deleted;
+}
+
+export async function clearCache() {
+  for (const modelId of Object.keys(MODELS)) await clearModelCache(modelId);
+  // Retire only obsolete app-owned model caches; never delete Transformers.js cache.
   if ('caches' in self) {
     for (const key of await caches.keys()) {
       if (key.startsWith('lm-models-')) await caches.delete(key);
     }
   }
-  loadedRuntime = null;
-  fallbackMode = false;
 }
-
 export function withSystem(msgs, prompt = DEFAULT_SYSTEM) {
   if (!prompt || msgs.some(m => m.role === 'system')) return msgs;
   return [{ role: 'system', content: prompt }, ...msgs];
