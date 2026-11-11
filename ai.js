@@ -383,6 +383,18 @@ function isMemoryAllocationError(err) {
     || message.includes('device lost');
 }
 
+function isProxyWorkerError(err) {
+  const message = (err?.message || String(err || '')).toLowerCase();
+  return message.includes('worker') && (
+    message.includes('blob:')
+    || message.includes('content security policy')
+    || message.includes('csp')
+    || message.includes('failed to construct')
+    || message.includes('refused to create')
+    || message.includes('unsafe-eval')
+  );
+}
+
 function memoryRecoveryAdvice() {
   return 'The ONNX runtime could not reserve memory while creating its inference session (std::bad_alloc). This is different from browser storage quota: cached model files can fit on disk while the runtime still cannot allocate enough working memory. Close other heavy tabs/apps, restart the browser, keep SmolLM2 360M selected, and retry. If WebGPU is available, enable hardware acceleration and relaunch Chrome/Edge; otherwise WASM is the CPU fallback. Clearing the model cache is a last resort because it forces a fresh download.';
 }
@@ -563,6 +575,24 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
           console.warn('[AI] failed candidate disposal:', disposeError);
         }
         await disposePipe();
+
+        // Some strict Content Security Policies block ONNX Runtime's Blob worker.
+        // Retry that WASM attempt once without proxying instead of failing model load.
+        // This compatibility path may be slower, but keeps the model usable.
+        const wasm = env.backends?.onnx?.wasm;
+        if (attempt.device === 'wasm' && attempt.proxyWorker !== false
+          && wasm?.proxy && isProxyWorkerError(err)) {
+          wasm.proxy = false;
+          orderedAttempts.splice(index + 1, 0, { ...attempt, proxyWorker: false });
+          onProgress({
+            status: 'retry',
+            progress: 0,
+            modelId,
+            device: 'wasm',
+            dtype: attempt.dtype,
+            text: 'The browser blocked the inference worker. Retrying in compatibility mode; the page may respond more slowly.',
+          });
+        }
       }
     }
 
@@ -656,7 +686,8 @@ export async function browserDiagnostics() {
   parts.push(`- WebGPU adapter: ${gpu.usable ? 'available' : 'not available (browser may expose the API without a usable adapter)'}`);
   if (gpu.usable) parts.push(`- WebGPU shader-f16: ${gpu.f16 ? 'supported' : 'not supported'}`);
   parts.push(`- Planned runtime: ${(await planFor(DEFAULT_MODEL)).map(item => `${item.device}/${item.dtype}`).join(', ') || 'none'}`);
-  parts.push(`- WebAssembly: ${typeof WebAssembly !== 'undefined' ? 'available' : 'not available'}`);\n  parts.push(`- WASM inference worker: ${env?.backends?.onnx?.wasm?.proxy ? 'enabled' : 'disabled'} (WebGPU runs separately)`);
+  parts.push(`- WebAssembly: ${typeof WebAssembly !== 'undefined' ? 'available' : 'not available'}`);
+  parts.push(`- WASM inference worker: ${env?.backends?.onnx?.wasm?.proxy ? 'enabled' : 'disabled'} (WebGPU runs separately)`);
   parts.push(`- Device memory: ${Number.isFinite(navigator.deviceMemory) ? `${navigator.deviceMemory} GB` : 'not reported'}`);
   parts.push(`- CPU cores: ${Number.isFinite(navigator.hardwareConcurrency) ? navigator.hardwareConcurrency : 'not reported'}`);
   parts.push(`- Browser: ${navigator.userAgent}`);
