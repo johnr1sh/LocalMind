@@ -10,7 +10,7 @@
 const VER = new URL(self.location.href).searchParams.get('v') || 'local';
 const CACHE_VERSION = VER.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48) || 'local';
 const STATIC = `lm-static-${CACHE_VERSION}`;
-const RUNTIME = `lm-rt-${CACHE_VERSION}';
+const RUNTIME = `lm-rt-${CACHE_VERSION}`;
 const PRECACHE = [
   './',
   './index.html',
