@@ -169,8 +169,8 @@ function renderVersionStatus(running, latest, detail = '') {
 function updateConnectivityUI() {
   const online = navigator.onLine;
   const message = online
-    ? 'Online · Local AI ready · Updates available'
-    : 'Offline · Local AI and saved chats remain available';
+    ? 'Online · Local inference · Downloads and updates available'
+    : 'Offline · Saved chats available · Cached models can run';
   for (const id of ['connection-status', 'settings-connection-status']) {
     const el = document.getElementById(id);
     if (!el) continue;
@@ -274,7 +274,13 @@ async function registerSW() {
     swRegistration = await navigator.serviceWorker.getRegistration() || null;
     if (navigator.onLine) {
       const latest = await fetchDeploymentVersion();
-      await registerWorkerForVersion(latest?.commit || null);
+      if (latest?.commit) {
+        await registerWorkerForVersion(latest.commit);
+      } else if (!swRegistration) {
+        // First install on a static host or while Vercel metadata is unavailable.
+        await registerWorkerForVersion(null);
+      }
+      // Never replace a known-good versioned worker with an unversioned fallback.
       await swRegistration?.update().catch(err => console.warn('[SW] update check failed:', err));
     }
     await checkForUpdates();
