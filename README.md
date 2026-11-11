@@ -1,13 +1,15 @@
 # LocalMind — Fully Offline AI Chat PWA
 
-A ChatGPT-style chat app that runs entirely in your browser. No API keys, no server, no tracking. Powered by [Transformers.js](https://huggingface.co/docs/transformers.js) and IndexedDB.
+A ChatGPT-style hybrid online/offline app that runs AI models locally in your browser. Internet access is used for first-time model downloads and application updates; once the app shell and a model are cached, chat, history, and inference continue offline. No cloud inference, API keys, accounts, or tracking. Powered by [Transformers.js](https://huggingface.co/docs/transformers.js) and IndexedDB.
 
 ---
 
 ## Features
 
-- **100% local inference** — AI runs in your browser via WebAssembly or WebGPU
-- **Offline-capable** — works without internet after the first model download
+- **Hybrid online/offline access** — open and use LocalMind online or offline after the first successful app/model setup
+- **100% local inference** — AI runs on the device via WebAssembly or WebGPU, even while connected
+- **Offline-first data** — conversations and settings remain in IndexedDB; no cloud sync is required
+- **Reconnect-aware updates** — checks deployment versions and installs app updates when internet returns
 - **No account required** — zero sign-ups, rate limits, or subscriptions
 - **Persistent chat history** — stored in IndexedDB, survives page refreshes
 - **Resilient model setup** — shared downloads, WebGPU→WASM fallback, dtype fallback, and clear progress diagnostics
@@ -30,19 +32,20 @@ A ChatGPT-style chat app that runs entirely in your browser. No API keys, no ser
 
 ## Architecture Decision Record
 
-### ADR-001: Client-only, no backend
+### ADR-001: Hybrid access, local-first inference
 
 **Status:** Accepted
 
-**Context:** Running LLMs requires either a GPU server (expensive, privacy concerns) or a client-side runtime. The goal is zero server cost and complete data privacy.
+**Context:** LocalMind should remain accessible without internet while still benefiting from online delivery of app updates and first-time model downloads.
 
-**Decision:** Use Transformers.js (ONNX Runtime Web) entirely in the browser. Static files only — no serverless functions, no DB, no auth.
+**Decision:** Run all inference locally with Transformers.js (ONNX Runtime Web). Use the network only for initial app delivery, model/runtime downloads, and deployment-version checks. Cache the app shell and runtime assets for offline launch; keep conversations and settings in IndexedDB. When the network returns, resume update checks without requiring a user restart. No cloud inference, remote conversation sync, authentication, or account backend is introduced.
 
 **Consequences:**
-- Models must be downloaded to the client (one-time, ~360MB–2.3GB)
+- Models must be downloaded once while online (~360MB–2.3GB)
+- Already downloaded models can generate responses offline
 - Generation speed depends on the user's device (WebGPU >> WASM)
-- No streaming from a server — streaming is real via TextStreamer tokens
-- Deployable to any static host (Vercel, Netlify, GitHub Pages, S3)
+- App updates and new model downloads require internet access
+- Deployable to Vercel and compatible static hosts; the Vercel version endpoint is optional outside Vercel
 
 ### ADR-002: Vanilla JS ES Modules, no framework
 
@@ -209,14 +212,16 @@ The included `vercel.json` adds security headers and disables caching for the ve
 
 ## Deployment Version and Updates
 
-Open Settings → Application Version to compare the service worker currently controlling the page with the latest deployed commit. LocalMind checks for deployments on startup, when the tab becomes visible, and every five minutes while the app is open. New workers use a commit-specific cache, activate immediately, and trigger one coordinated reload. Model weights remain cached separately and are preserved across app updates. If the version endpoint cannot be reached, the app reports that deployment status cannot be verified and keeps the current cached version usable.
+Open Settings → Application Version to compare the service worker currently controlling the page with the latest deployed commit. LocalMind checks for deployments on startup, when the tab becomes visible, and every five minutes while online. When offline, it keeps the currently installed service worker and cached app shell instead of attempting an online update. On reconnection, it fetches deployment metadata, registers the commit-specific worker, and checks for updates automatically. New workers use isolated caches and trigger one coordinated reload after active generation finishes. Model weights remain cached separately and are preserved across app updates. The connection indicator explicitly distinguishes network availability from local AI availability: online inference still runs on-device, and offline inference requires a model already downloaded.
 
 ## Offline Usage
 
-1. Open the app while online — the service worker caches static files automatically
-2. Start a chat — this triggers the model download (~360MB for SmolLM2)
-3. Wait for "Ready" badge in the welcome screen
-4. You can now close your internet connection and use the app fully offline
+1. Open the app while online — the service worker caches the application shell and runtime assets.
+2. Start a chat — this triggers the selected model download (~360MB for SmolLM2).
+3. Wait for the model badge to show Ready.
+4. Confirm your conversations are visible, then disconnect from the internet.
+5. Reopen LocalMind from its installed PWA or cached browser tab and continue chatting offline.
+6. When internet returns, LocalMind automatically checks for app updates. Model downloads that were not completed must be retried online.
 
 The model is stored in the browser's Cache Storage and persists until you:
 - Manually clear it via Settings → Clear Model Cache
@@ -257,9 +262,10 @@ The export format is versioned (`"version": 1`) for forward compatibility.
   so the new service worker takes over (it also deletes the old duplicate model cache).
 
 **Model download is slow or fails**
-- Check your internet connection
-- Try a different network (some corporate proxies block HuggingFace)
-- The model caches after the first download — subsequent loads are instant
+- First-time model/runtime downloads require internet. Check your connection or try a different network (some proxies block Hugging Face).
+- If a model is already cached, LocalMind can still load and run it offline.
+- If a download was interrupted, reconnect and retry; do not clear a valid existing model cache.
+- The model caches after the first successful download — subsequent loads can work offline.
 
 **"std::bad_alloc", "Can't create a session", or "ERROR_CODE: 6" during model load**
 - This is an ONNX Runtime memory-allocation failure, not a browser storage-quota error. Model files may fit in Cache Storage while the runtime still cannot reserve enough working memory.
