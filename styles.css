@@ -1698,3 +1698,25 @@ body {
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
+
+
+/* Hybrid connectivity state: network enhances LocalMind but is not required for local inference. */
+.connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 8px 0 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+.connection-status::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.connection-status.is-online { color: var(--success); }
+.connection-status.is-offline { color: #d69b38; }

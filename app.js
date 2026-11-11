@@ -96,6 +96,7 @@ let pendingUpdateReload = false;
 let versionPollTimer = null;
 
 async function fetchDeploymentVersion() {
+  if (!navigator.onLine) return null;
   try {
     const response = await fetch(new URL('./api/version', document.baseURI), {
       cache: 'no-store',
@@ -165,29 +166,83 @@ function renderVersionStatus(running, latest, detail = '') {
   return outdated;
 }
 
+function updateConnectivityUI() {
+  const online = navigator.onLine;
+  const message = online
+    ? 'Online · Local inference · Downloads and updates available'
+    : 'Offline · Saved chats available · Cached models can run';
+  for (const id of ['connection-status', 'settings-connection-status']) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.textContent = message;
+    el.className = `connection-status ${online ? 'is-online' : 'is-offline'}`;
+  }
+}
+
+async function registerWorkerForVersion(commit = null) {
+  if (!('serviceWorker' in navigator)) return null;
+  const workerUrl = commit
+    ? `./service-worker.js?v=${encodeURIComponent(commit)}`
+    : './service-worker.js';
+  const registration = await navigator.serviceWorker.register(workerUrl, {
+    scope: './',
+    updateViaCache: 'none',
+  });
+  swRegistration = registration;
+  registration.addEventListener('updatefound', () => {
+    const installing = registration.installing;
+    installing?.addEventListener('statechange', () => {
+      if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+        document.getElementById('update-toast')?.classList.remove('hidden');
+        checkForUpdates();
+      }
+    });
+  });
+  return registration;
+}
+
 async function checkForUpdates() {
+  updateConnectivityUI();
   const [latest, running] = await Promise.all([
     fetchDeploymentVersion(),
     getWorkerVersion(),
   ]);
   const outdated = renderVersionStatus(running, latest);
-  if (outdated) {
+  if (!navigator.onLine) {
+    const state = document.getElementById('app-version-state');
+    if (state) state.textContent = running
+      ? 'Offline mode · Running cached application'
+      : 'Offline mode · Waiting for cached application control';
+  } else if (outdated) {
     document.getElementById('update-toast')?.classList.remove('hidden');
     swRegistration?.update().catch(err => console.warn('[SW] update check failed:', err));
   }
   return { latest, running, outdated };
 }
 
-async function registerSW() {
+async function handleConnectionRestored() {
+  updateConnectivityUI();
   const latest = await fetchDeploymentVersion();
+  try {
+    if (latest?.commit) {
+      await registerWorkerForVersion(latest.commit);
+    } else {
+      swRegistration?.update().catch(err => console.warn('[SW] update check failed:', err));
+    }
+  } catch (err) {
+    console.warn('[SW] online update registration failed:', err);
+  }
+  await checkForUpdates();
+}
+
+async function registerSW() {
   if (!('serviceWorker' in navigator)) {
-    renderVersionStatus(null, latest, 'Service workers are not supported');
+    updateConnectivityUI();
+    renderVersionStatus(null, null, 'Service workers are not supported');
     return;
   }
 
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    // The first controller claim is an initial install. A later controller change
-    // means a new deployment has taken over; reload once to replace old JS modules.
     if (hadServiceWorkerController && !isReloadingForUpdate) {
       pendingUpdateReload = true;
       const message = document.getElementById('update-toast-message');
@@ -203,42 +258,40 @@ async function registerSW() {
     checkForUpdates();
   });
 
+  window.addEventListener('online', handleConnectionRestored);
+  window.addEventListener('offline', () => {
+    updateConnectivityUI();
+    checkForUpdates();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && navigator.onLine) checkForUpdates();
+  });
+
+  updateConnectivityUI();
   try {
-    // The commit SHA in the script URL is the automatic build identifier.
-    // Changing it makes the browser install a distinct worker and cache namespace.
-    const workerUrl = latest?.commit
-      ? `./service-worker.js?v=${encodeURIComponent(latest.commit)}`
-      : './service-worker.js';
-
-    swRegistration = await navigator.serviceWorker.register(workerUrl, {
-      scope: './',
-      updateViaCache: 'none',
-    });
-
-    swRegistration.addEventListener('updatefound', () => {
-      const installing = swRegistration.installing;
-      installing?.addEventListener('statechange', () => {
-        if (installing.state === 'installed' && navigator.serviceWorker.controller) {
-          document.getElementById('update-toast')?.classList.remove('hidden');
-          checkForUpdates();
-        }
-      });
-    });
-
-    await swRegistration.update().catch(err => console.warn('[SW] update check failed:', err));
+    // Do not attempt to replace/register a worker while offline. Keep the existing
+    // controller and its cached shell; retry versioned registration on reconnect.
+    swRegistration = await navigator.serviceWorker.getRegistration() || null;
+    if (navigator.onLine) {
+      const latest = await fetchDeploymentVersion();
+      if (latest?.commit) {
+        await registerWorkerForVersion(latest.commit);
+      } else if (!swRegistration) {
+        // First install on a static host or while Vercel metadata is unavailable.
+        await registerWorkerForVersion(null);
+      }
+      // Never replace a known-good versioned worker with an unversioned fallback.
+      await swRegistration?.update().catch(err => console.warn('[SW] update check failed:', err));
+    }
     await checkForUpdates();
 
     if (versionPollTimer) clearInterval(versionPollTimer);
     versionPollTimer = setInterval(() => {
-      if (!document.hidden) checkForUpdates();
+      if (!document.hidden && navigator.onLine) checkForUpdates();
     }, 5 * 60 * 1000);
-
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) checkForUpdates();
-    });
   } catch (err) {
-    console.warn('[SW] register failed:', err);
-    renderVersionStatus(null, latest, 'Service worker registration failed');
+    console.warn('[SW] registration check failed:', err);
+    renderVersionStatus(await getWorkerVersion(), null, 'Keeping the installed offline version');
   }
 }
 
