@@ -1,10 +1,9 @@
 /**
  * LocalMind service worker
  *
- * Each deployment receives a unique worker URL (?v=<commit SHA>) and therefore
- * an isolated static/runtime cache namespace. This prevents an installing worker
- * from overwriting assets still being served by the currently active worker.
- * The Transformers.js model cache is deliberately left untouched.
+ * Each deployment receives a unique worker URL (?v=<commit SHA>) and an isolated
+ * static-asset cache. The pinned ONNX runtime dependency cache survives app updates,
+ * while Transformers.js manages the large model-weight cache separately.
  */
 
 const VER = new URL(self.location.href).searchParams.get('v') || 'local';
