@@ -337,15 +337,14 @@ function setupEnv() {
   env.useBrowserCache = true;
   env.useWasmCache = true;
 
-  // Static no-build app: keep ONNX Runtime on the main thread. Multi-threaded WASM
-  // needs SharedArrayBuffer, i.e. cross-origin isolation, which this host does not
-  // enable — so only use extra threads when the page happens to be isolated.
+  // CPU/WASM inference can monopolize the browser's main thread and freeze
+  // typing, scrolling, and message rendering. ONNX Runtime's proxy worker moves
+  // that computation off the UI thread without requiring SharedArrayBuffer.
+  // This applies only to WASM; WebGPU uses its own execution provider and cannot
+  // use the WASM proxy. Keep one WASM thread to limit peak memory on low-RAM devices.
   const wasm = env.backends?.onnx?.wasm;
   if (wasm) {
-    wasm.proxy = false;
-    // A single WASM worker minimizes peak memory during ONNX session creation.
-    // More threads can multiply temporary allocations and trigger std::bad_alloc
-    // on otherwise capable machines. Prefer predictable startup over throughput.
+    wasm.proxy = true;
     wasm.numThreads = 1;
   }
 }
@@ -657,7 +656,7 @@ export async function browserDiagnostics() {
   parts.push(`- WebGPU adapter: ${gpu.usable ? 'available' : 'not available (browser may expose the API without a usable adapter)'}`);
   if (gpu.usable) parts.push(`- WebGPU shader-f16: ${gpu.f16 ? 'supported' : 'not supported'}`);
   parts.push(`- Planned runtime: ${(await planFor(DEFAULT_MODEL)).map(item => `${item.device}/${item.dtype}`).join(', ') || 'none'}`);
-  parts.push(`- WebAssembly: ${typeof WebAssembly !== 'undefined' ? 'available' : 'not available'}`);
+  parts.push(`- WebAssembly: ${typeof WebAssembly !== 'undefined' ? 'available' : 'not available'}`);\n  parts.push(`- WASM inference worker: ${env?.backends?.onnx?.wasm?.proxy ? 'enabled' : 'disabled'} (WebGPU runs separately)`);
   parts.push(`- Device memory: ${Number.isFinite(navigator.deviceMemory) ? `${navigator.deviceMemory} GB` : 'not reported'}`);
   parts.push(`- CPU cores: ${Number.isFinite(navigator.hardwareConcurrency) ? navigator.hardwareConcurrency : 'not reported'}`);
   parts.push(`- Browser: ${navigator.userAgent}`);
