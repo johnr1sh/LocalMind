@@ -408,6 +408,13 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
     setupEnv();
     let attempts = await planFor(modelId);
 
+    // Check the local cache before referencing it in the online preflight.
+    // This declaration must precede preflight to avoid a temporal dead-zone error.
+    let cacheChecks = await Promise.all(attempts.map(async attempt => {
+      try { return await ModelRegistry.is_cached(modelId, { dtype: attempt.dtype }); }
+      catch { return false; }
+    }));
+
     // Preflight remote artifacts only when this device has no complete cached
     // runtime/dtype. A previously downloaded model must remain usable even if its
     // upstream repository later becomes unavailable.
@@ -434,7 +441,8 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
 
     // Reuse a fully cached backend/dtype first. This is essential offline and
     // avoids downloading a second quantization when the first one is already ready.
-    let cacheChecks = await Promise.all(attempts.map(async attempt => {
+    // Re-check after Hub metadata may have filtered the attempt list.
+    cacheChecks = await Promise.all(attempts.map(async attempt => {
       try { return await ModelRegistry.is_cached(modelId, { dtype: attempt.dtype }); }
       catch { return false; }
     }));
