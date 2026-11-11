@@ -1,0 +1,27 @@
+name: Verify LocalMind
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  static-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check JavaScript syntax
+        run: |
+          node --check --input-type=module < ai.js
+          node --check --input-type=module < app.js
+          node --check --input-type=module < db.js
+          node --check --input-type=module < ui.js
+          node --check service-worker.js
+          node --check api/version.js
+      - name: Verify model library and offline runtime invariants
+        run: node scripts/verify-model-library.mjs

@@ -13,8 +13,8 @@ A ChatGPT-style hybrid online/offline app that runs AI models locally in your br
 - **No account required** — zero sign-ups, rate limits, or subscriptions
 - **Persistent chat history** — stored in IndexedDB, survives page refreshes
 - **Resilient model setup** — shared downloads, WebGPU→WASM fallback, dtype fallback, and clear progress diagnostics
-- **Browser Helper mode** — if the model cannot download, LocalMind can still explain browser/storage/WebGPU status and recovery steps
-- **Multi-model support** — SmolLM2 360M, Qwen2.5 0.5B, Phi-3.5 Mini
+- **Browser diagnostics** — send `/browser` to inspect storage, WebGPU, WASM, network, and device capabilities
+- **Multi-model library** — SmolLM2 135M and 360M, Qwen2.5 0.5B and 1.5B, Phi-3.5 Mini; download, activate, and remove models independently
 - **Streaming responses** — real-time token output
 - **Markdown rendering** — code blocks, lists, bold, italic, links
 - **Installable PWA** — works on Android, iOS, and desktop
@@ -41,7 +41,7 @@ A ChatGPT-style hybrid online/offline app that runs AI models locally in your br
 **Decision:** Run all inference locally with Transformers.js (ONNX Runtime Web). Use the network only for initial app delivery, model/runtime downloads, and deployment-version checks. Cache the app shell and runtime assets for offline launch; keep conversations and settings in IndexedDB. When the network returns, resume update checks without requiring a user restart. No cloud inference, remote conversation sync, authentication, or account backend is introduced.
 
 **Consequences:**
-- Models must be downloaded once while online (~360MB–2.3GB)
+- Models must be downloaded once while online (~117MB–2.3GB)
 - Already downloaded models can generate responses offline
 - Generation speed depends on the user's device (WebGPU >> WASM)
 - App updates and new model downloads require internet access
@@ -77,9 +77,9 @@ A ChatGPT-style hybrid online/offline app that runs AI models locally in your br
 
 **Status:** Accepted
 
-**Decision:** Static assets → Cache First. HTML → Network First. Transformers.js CDN → Cache First. Model weights are **not** handled by the service worker; Transformers.js caches them itself in `transformers-cache` (caching them twice doubled disk use and buffered the whole download in RAM).
+**Decision:** Static assets → Cache First. HTML → Network First. Transformers.js and ONNX Runtime CDN dependencies → Cache First in a runtime cache that survives app deployments. Model weights are **not** handled by the service worker; Transformers.js caches them itself in `transformers-cache` (caching them twice doubled disk use and buffered the whole download in RAM).
 
-**Why not precache model weights?** They're 360MB–2.3GB. Precaching at SW install time would fail on most devices and block SW activation. Lazy caching on first use is safer.
+**Why not precache model weights?** They can range from about 117MB to multiple gigabytes. Precaching at SW install time would fail on most devices and block SW activation. Lazy caching on first use is safer.
 
 ---
 
@@ -121,16 +121,20 @@ A ChatGPT-style hybrid online/offline app that runs AI models locally in your br
 
 ## Supported Models
 
-| Model (Hugging Face repo) | Download | Runs on | Notes |
-|-------|------|-------|---------|
-| `HuggingFaceTB/SmolLM2-360M-Instruct` | ~300MB (WebGPU q4f16) / ~420MB (CPU q4) | WebGPU or CPU | Default, safest |
-| `onnx-community/Qwen2.5-0.5B-Instruct` | ~485MB (WebGPU q4f16) / ~515MB (CPU q8) | WebGPU or CPU | Better quality |
-| `onnx-community/Phi-3.5-mini-instruct-onnx-web` | ~2.3GB (q4f16 only) | **WebGPU with shader-f16 only** | Largest; blocked on devices without it |
+| Model (Hugging Face repo) | Approx. quantized weights | Runtime | Profile |
+|-------|------:|-------|---------|
+| `onnx-community/SmolLM2-135M-Instruct-ONNX` | 117MB q4f16 / 181MB q4 | WebGPU or WASM | Ultra-light starter |
+| `HuggingFaceTB/SmolLM2-360M-Instruct` | 273MB q4f16 / 388MB q4 | WebGPU or WASM | Balanced everyday model |
+| `onnx-community/Qwen2.5-0.5B-Instruct` | 483MB q4f16 / 786MB q4 | WebGPU or WASM | Multilingual option |
+| `onnx-community/Qwen3-0.6B-ONNX` | 570MB q4f16 / 919MB q4 | WebGPU or WASM | Newer compact multilingual model |
+| `onnx-community/TinyLlama-1.1B-Chat-v1.0-ONNX` | 714MB q4f16 / 910MB q4 | WebGPU or WASM | Chat-tuned alternative |
+| `onnx-community/Qwen2.5-1.5B-Instruct` | 1.22GB q4f16 / 1.79GB q4 | WebGPU or WASM | Higher quality, higher memory |
+| `onnx-community/Phi-3.5-mini-instruct-onnx-web` | ~2.3GB q4f16 | **WebGPU with shader-f16 only** | Advanced / high-memory |
 
 > The official `Qwen/Qwen2.5-0.5B-Instruct` repo has no `onnx/` folder, so it can never load in
 > Transformers.js. Old saved settings pointing at it are migrated automatically.
 
-The app defaults to SmolLM2 360M — it's the best balance of speed and quality for browser inference. First-run downloads start when the user sends a message, so the welcome screen stays usable instead of blocking behind a large model transfer. If loading fails, Browser Helper mode provides diagnostics and recovery steps.
+The app defaults to SmolLM2 135M to minimize the first download and reduce memory pressure. Settings → Model Library lets users download and keep multiple models, activate one, or remove its cached files. Only one inference pipeline is kept resident at a time. A failed model load stops generation and reports the real error; it never stores a simulated helper message as an AI answer.
 
 ---
 
@@ -216,8 +220,8 @@ Open Settings → Application Version to compare the service worker currently co
 
 ## Offline Usage
 
-1. Open the app while online — the service worker caches the application shell and runtime assets.
-2. Start a chat — this triggers the selected model download (~360MB for SmolLM2).
+1. Open the app while online — the service worker takes control and caches the app plus the Transformers.js / ONNX Runtime CDN dependencies.
+2. Open Settings → Model Library and choose Download for a model (SmolLM2 135M is the smallest starter).
 3. Wait for the model badge to show Ready.
 4. Confirm your conversations are visible, then disconnect from the internet.
 5. Reopen LocalMind from its installed PWA or cached browser tab and continue chatting offline.
@@ -254,7 +258,7 @@ The export format is versioned (`"version": 1`) for forward compatibility.
 
 ## Troubleshooting
 
-**Model never finishes loading / "Browser Helper mode" right away**
+**Model never finishes loading / local AI is unavailable**
 - Open DevTools → Network and look for a red `404` on `huggingface.co/.../onnx/model_*.onnx`.
   That means the repo/dtype combo in `MODELS` (ai.js) has no such file.
 - Allow `cdn.jsdelivr.net`, `huggingface.co` and `*.hf.co` through any ad blocker/proxy.
@@ -265,7 +269,7 @@ The export format is versioned (`"version": 1`) for forward compatibility.
 - First-time model/runtime downloads require internet. Check your connection or try a different network (some proxies block Hugging Face).
 - If a model is already cached, LocalMind can still load and run it offline.
 - If a download was interrupted, reconnect and retry; do not clear a valid existing model cache.
-- The model caches after the first successful download — subsequent loads can work offline.
+- Each completed model caches independently; subsequent loads can work offline when its exact runtime/dtype files are cached.
 
 **"std::bad_alloc", "Can't create a session", or "ERROR_CODE: 6" during model load**
 - This is an ONNX Runtime memory-allocation failure, not a browser storage-quota error. Model files may fit in Cache Storage while the runtime still cannot reserve enough working memory.

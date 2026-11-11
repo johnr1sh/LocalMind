@@ -1,16 +1,18 @@
 /**
  * LocalMind service worker
  *
- * Each deployment receives a unique worker URL (?v=<commit SHA>) and therefore
- * an isolated static/runtime cache namespace. This prevents an installing worker
- * from overwriting assets still being served by the currently active worker.
- * The Transformers.js model cache is deliberately left untouched.
+ * Each deployment receives a unique worker URL (?v=<commit SHA>) and an isolated
+ * static-asset cache. The pinned ONNX runtime dependency cache survives app updates,
+ * while Transformers.js manages the large model-weight cache separately.
  */
 
 const VER = new URL(self.location.href).searchParams.get('v') || 'local';
 const CACHE_VERSION = VER.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48) || 'local';
 const STATIC = `lm-static-${CACHE_VERSION}`;
-const RUNTIME = `lm-rt-${CACHE_VERSION}`;
+// The Transformers.js version is pinned in ai.js, so keep its runtime cache
+// stable across app deployments. Otherwise every update would delete the only
+// offline copy of ONNX Runtime/WASM before the next page load can reuse it.
+const RUNTIME = 'lm-runtime-transformers-4-3-0';
 const PRECACHE = [
   './',
   './index.html',
@@ -133,5 +135,8 @@ self.addEventListener('message', event => {
 });
 
 function isCDN(url) {
-  return url.href.includes('cdn.jsdelivr.net/npm/@huggingface');
+  // Transformers.js pulls ONNX Runtime and WASM helpers from sibling npm
+  // packages on jsDelivr. Cache the full npm dependency graph, not only the
+  // top-level Hugging Face package, so the runtime can boot offline later.
+  return url.hostname === 'cdn.jsdelivr.net' && url.pathname.includes('/npm/');
 }

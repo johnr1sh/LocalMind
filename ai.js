@@ -2,21 +2,44 @@
  * ai.js
  * Local inference via Transformers.js. Handles model load, generation, streaming.
  * Includes resilient model loading with shared in-flight requests, backend/dtype
- * fallback, aggregate progress, diagnostics, and a browser-helper fallback so
- * users are never trapped behind a failed model download.
+ * fallback, aggregate progress, and diagnostics so model failures are visible
+ * and never disguised as successful assistant responses.
  *
  * Every model below was checked against its Hugging Face repo: the `onnx/`
  * folder must contain `model_<dtype>.onnx` for each dtype we request, otherwise
  * Transformers.js gets a 404 and the model "downloads" forever / never loads.
  */
 
-import {
-  pipeline,
-  TextStreamer,
-  InterruptableStoppingCriteria,
-  ModelRegistry,
-  env,
-} from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0';
+// Load the heavy inference runtime only after the service worker controls the page.
+// A static CDN import runs before app.js can register the worker and breaks reliable
+// offline startup on a fresh install.
+const RUNTIME_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0';
+let runtimePromise = null;
+let pipeline = null;
+let TextStreamer = null;
+let InterruptableStoppingCriteria = null;
+let ModelRegistry = null;
+let env = null;
+
+async function ensureRuntime() {
+  if (!runtimePromise) {
+    runtimePromise = import(RUNTIME_URL).then(runtime => {
+      pipeline = runtime.pipeline;
+      TextStreamer = runtime.TextStreamer;
+      InterruptableStoppingCriteria = runtime.InterruptableStoppingCriteria;
+      ModelRegistry = runtime.ModelRegistry;
+      env = runtime.env;
+      if (!pipeline || !TextStreamer || !InterruptableStoppingCriteria || !ModelRegistry || !env) {
+        throw new Error('The Transformers.js runtime loaded, but required inference APIs are missing.');
+      }
+      return runtime;
+    }).catch(err => {
+      runtimePromise = null;
+      throw new Error(`Could not load the local AI runtime from the CDN. Check the connection or reload after the runtime has been cached. ${err?.message || String(err)}`);
+    });
+  }
+  return runtimePromise;
+}
 
 /**
  * Per-model runtime plan.
@@ -26,34 +49,76 @@ import {
  * `mb` is the real download size of that file set (weights + external data).
  */
 export const MODELS = {
+  'onnx-community/SmolLM2-135M-Instruct-ONNX': {
+    name: 'SmolLM2 135M',
+    desc: 'Ultra-light starter model for low-memory devices',
+    size: '117MB WebGPU / 181MB WASM',
+    storageMB: 360,
+    runtimeMB: 650,
+    minDeviceMemoryGB: 3,
+    recommendedDeviceMemoryGB: 4,
+    webgpu: { dtype: 'q4f16', mb: 117, noF16Dtype: 'q4', noF16Mb: 181 },
+    wasm: { dtype: 'q4', mb: 181 },
+  },
   'HuggingFaceTB/SmolLM2-360M-Instruct': {
     name: 'SmolLM2 360M',
-    desc: 'Fast, lightweight — safest first download for most browsers',
-    size: '~300–420MB download',
+    desc: 'Lightweight general-purpose assistant',
+    size: '273MB WebGPU / 388MB WASM',
     storageMB: 700,
     runtimeMB: 1200,
     minDeviceMemoryGB: 4,
     recommendedDeviceMemoryGB: 8,
-    webgpu: { dtype: 'q4f16', mb: 300, noF16Dtype: 'q4', noF16Mb: 420 },
-    wasm: { dtype: 'q4', mb: 420 },
+    webgpu: { dtype: 'q4f16', mb: 273, noF16Dtype: 'q4', noF16Mb: 388 },
+    wasm: { dtype: 'q4', mb: 388 },
   },
-  // NOTE: the official Qwen/ repo has NO onnx/ folder (404). onnx-community has it.
   'onnx-community/Qwen2.5-0.5B-Instruct': {
     name: 'Qwen2.5 0.5B',
-    desc: 'More capable, still reasonable on modern laptops',
-    size: '~485–515MB download',
-    storageMB: 900,
-    runtimeMB: 1600,
+    desc: 'Stronger multilingual assistant for supported devices',
+    size: '483MB WebGPU / 786MB WASM',
+    storageMB: 1200,
+    runtimeMB: 1700,
     minDeviceMemoryGB: 6,
     recommendedDeviceMemoryGB: 8,
-    webgpu: { dtype: 'q4f16', mb: 485 },
-    wasm: { dtype: 'q8', mb: 515 },
+    webgpu: { dtype: 'q4f16', mb: 483, noF16Dtype: 'q4', noF16Mb: 786 },
+    wasm: { dtype: 'q4', mb: 786 },
   },
-  // This repo only ships model_q4f16.onnx (+ .onnx_data) => WebGPU with shader-f16 only.
+  'onnx-community/Qwen3-0.6B-ONNX': {
+    name: 'Qwen3 0.6B',
+    desc: 'Newer compact multilingual model with reasoning capability',
+    size: '570MB WebGPU / 919MB WASM',
+    storageMB: 1500,
+    runtimeMB: 1900,
+    minDeviceMemoryGB: 6,
+    recommendedDeviceMemoryGB: 8,
+    webgpu: { dtype: 'q4f16', mb: 570, noF16Dtype: 'q4', noF16Mb: 919 },
+    wasm: { dtype: 'q4', mb: 919 },
+  },
+  'onnx-community/TinyLlama-1.1B-Chat-v1.0-ONNX': {
+    name: 'TinyLlama 1.1B',
+    desc: 'Compact chat-tuned alternative with CPU/WASM support',
+    size: '714MB WebGPU / 910MB WASM',
+    storageMB: 1600,
+    runtimeMB: 2300,
+    minDeviceMemoryGB: 6,
+    recommendedDeviceMemoryGB: 8,
+    webgpu: { dtype: 'q4f16', mb: 714, noF16Dtype: 'q4', noF16Mb: 910 },
+    wasm: { dtype: 'q4', mb: 910 },
+  },
+  'onnx-community/Qwen2.5-1.5B-Instruct': {
+    name: 'Qwen2.5 1.5B',
+    desc: 'Higher quality; requires more memory and storage',
+    size: '1.22GB WebGPU / 1.79GB WASM',
+    storageMB: 2600,
+    runtimeMB: 3600,
+    minDeviceMemoryGB: 8,
+    recommendedDeviceMemoryGB: 12,
+    webgpu: { dtype: 'q4f16', mb: 1249, noF16Dtype: 'q4', noF16Mb: 1833 },
+    wasm: { dtype: 'q4', mb: 1833 },
+  },
   'onnx-community/Phi-3.5-mini-instruct-onnx-web': {
     name: 'Phi-3.5 Mini',
-    desc: 'Largest local model — WebGPU only, needs lots of free storage/RAM',
-    size: '~2.3GB download (WebGPU only)',
+    desc: 'Advanced large model; WebGPU with shader-f16 required',
+    size: '~2.3GB WebGPU only',
     storageMB: 3600,
     runtimeMB: 3500,
     minDeviceMemoryGB: 8,
@@ -63,7 +128,7 @@ export const MODELS = {
   },
 };
 
-export const DEFAULT_MODEL = 'HuggingFaceTB/SmolLM2-360M-Instruct';
+export const DEFAULT_MODEL = 'onnx-community/SmolLM2-135M-Instruct-ONNX';
 
 // Old saved settings / conversations may reference ids that never worked.
 const LEGACY_IDS = {
@@ -237,12 +302,12 @@ let loadingPromise = null;
 let stopFlag = false;
 let stopper = null;
 let lastError = null;
-let fallbackMode = false;
 
 function setupEnv() {
   env.allowRemoteModels = true;
   env.allowLocalModels = false;
   env.useBrowserCache = true;
+  env.useWasmCache = true;
 
   // Static no-build app: keep ONNX Runtime on the main thread. Multi-threaded WASM
   // needs SharedArrayBuffer, i.e. cross-origin isolation, which this host does not
@@ -301,7 +366,7 @@ function friendlyLoadError(err, attempts) {
   let advice;
   if (isMemoryAllocationError(err)) advice = memoryRecoveryAdvice();
   else if (/404|not found|could not locate|unauthorized/i.test(message)) advice = 'The model files were not found on Hugging Face (wrong repo or dtype). Update LocalMind to the latest version.';
-  else advice = 'Check that you are online for the first download, have enough free browser storage, and are using a recent Chrome/Edge browser. You can still use Browser Helper mode for diagnostics.';
+  else advice = 'Check that you are online for the first download, have enough free browser storage, and are using a recent Chrome/Edge browser. Open /browser for device diagnostics.';
   return new Error(`Could not finish loading the local AI model. Tried ${tried}. ${message} ${advice}`);
 }
 
@@ -319,8 +384,7 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
   modelId = normalizeModelId(modelId);
 
   if (loadedModel === modelId && pipe) {
-    fallbackMode = false;
-    onProgress({ status: 'ready', progress: 100, modelId });
+      onProgress({ status: 'ready', progress: 100, modelId });
     return;
   }
 
@@ -332,20 +396,59 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
   const cfg = MODELS[modelId];
   if (!cfg) throw new Error(`Unknown model: ${modelId}`);
 
-  setupEnv();
+  // Set the lock before any asynchronous runtime import. Two rapid requests
+  // must never initialize two ONNX sessions in parallel.
   loading = true;
   loadingModel = modelId;
-  fallbackMode = false;
+
   lastError = null;
 
   loadingPromise = (async () => {
-    const attempts = await planFor(modelId);
+    await ensureRuntime();
+    setupEnv();
+    let attempts = await planFor(modelId);
+
+    // Preflight remote artifacts only when this device has no complete cached
+    // runtime/dtype. A previously downloaded model must remain usable even if its
+    // upstream repository later becomes unavailable.
+    if (navigator.onLine && attempts.length && !cacheChecks.some(Boolean)
+      && typeof ModelRegistry.get_available_dtypes === 'function') {
+      try {
+        const available = await ModelRegistry.get_available_dtypes(modelId);
+        if (!available?.length) {
+          throw new Error(`The model repository ${modelId} has no usable ONNX text-generation weights.`);
+        }
+        attempts = attempts.filter(attempt => available.includes(attempt.dtype));
+        if (!attempts.length) {
+          throw new Error(`No compatible quantization was found for ${modelId}. Hub offers: ${available.join(', ')}.`);
+        }
+        cacheChecks = await Promise.all(attempts.map(async attempt => {
+          try { return await ModelRegistry.is_cached(modelId, { dtype: attempt.dtype }); }
+          catch { return false; }
+        }));
+      } catch (err) {
+        if (/404|not found|no usable ONNX|no compatible quantization|unauthorized/i.test(err?.message || '')) throw err;
+        console.warn('[AI] Could not preflight model artifacts:', err);
+      }
+    }
+
+    // Reuse a fully cached backend/dtype first. This is essential offline and
+    // avoids downloading a second quantization when the first one is already ready.
+    let cacheChecks = await Promise.all(attempts.map(async attempt => {
+      try { return await ModelRegistry.is_cached(modelId, { dtype: attempt.dtype }); }
+      catch { return false; }
+    }));
+    const orderedAttempts = attempts.map((attempt, index) => ({ attempt, cached: cacheChecks[index] }))
+      .sort((a, b) => Number(b.cached) - Number(a.cached))
+      .map(item => item.attempt);
     const failures = [];
 
-    if (!attempts.length) {
+    if (!orderedAttempts.length) {
       throw friendlyLoadError(
-        new Error(`${cfg.name} needs WebGPU with shader-f16 support, which is not available here.`),
-        attempts,
+        new Error(!cfg.wasm && cfg.webgpu
+          ? `${cfg.name} requires WebGPU with shader-f16 support, which is not available here.`
+          : `No compatible runtime is available for ${cfg.name} on this device.`),
+        orderedAttempts,
       );
     }
 
@@ -353,14 +456,15 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
       status: 'initiate',
       progress: 0,
       modelId,
-      text: `Preparing ${cfg.name}. ${attempts.length} compatible runtime(s) available.`,
+      text: `Preparing ${cfg.name}. ${orderedAttempts.length} compatible runtime(s) available.`,
     });
 
     // Free the previous model's weights/session before allocating another.
     await disposePipe();
 
-    for (let index = 0; index < attempts.length; index += 1) {
-      const attempt = attempts[index];
+    for (let index = 0; index < orderedAttempts.length; index += 1) {
+      const attempt = orderedAttempts[index];
+      let candidate = null;
       try {
         onProgress({
           status: index ? 'retry' : 'initiate',
@@ -373,7 +477,7 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
             : `Loading ${cfg.name} with ${attempt.device.toUpperCase()} (${attempt.dtype})…`,
         });
 
-        const candidate = await pipeline('text-generation', modelId, {
+        candidate = await pipeline('text-generation', modelId, {
           dtype: attempt.dtype,
           device: attempt.device,
           progress_callback: update => {
@@ -388,11 +492,25 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
           throw new Error('The inference runtime returned an incomplete text-generation pipeline.');
         }
 
+        // A pipeline can construct successfully and still fail on its first
+        // ONNX session/generation. Run a tiny real inference before declaring Ready.
+        onProgress({
+          status: 'loading',
+          progress: 92,
+          modelId,
+          device: attempt.device,
+          dtype: attempt.dtype,
+          text: 'Running a short inference self-test…',
+        });
+        const smoke = await candidate('Hello.', { max_new_tokens: 4, do_sample: false });
+        if (!Array.isArray(smoke) || smoke.length === 0) {
+          throw new Error('The model initialized but returned no output during its inference self-test.');
+        }
+
         pipe = candidate;
         loadedModel = modelId;
         loadedRuntime = attempt;
-        fallbackMode = false;
-        onProgress({
+          onProgress({
           status: 'ready',
           progress: 100,
           modelId,
@@ -405,12 +523,15 @@ export async function loadModel(modelId = DEFAULT_MODEL, onProgress = () => {}) 
         lastError = err;
         failures.push({ ...attempt, message: err?.message || String(err) });
         console.warn(`[AI] ${modelId} failed on ${attempt.device}/${attempt.dtype}:`, err);
+        try { await candidate?.dispose?.(); } catch (disposeError) {
+          console.warn('[AI] failed candidate disposal:', disposeError);
+        }
         await disposePipe();
       }
     }
 
     const details = failures.map(item => `${item.device}/${item.dtype}: ${item.message}`).join(' | ');
-    throw friendlyLoadError(new Error(details || 'No compatible inference runtime was available.'), attempts);
+    throw friendlyLoadError(new Error(details || 'No compatible inference runtime was available.'), orderedAttempts);
   })();
 
   try {
@@ -427,7 +548,7 @@ export async function generate(msgs, settings = {}, onToken = () => {}, onDone =
   stopFlag = false;
 
   if (!pipe) {
-    return generateFallback(msgs, settings, onToken, onDone);
+    throw new Error('No local AI model is loaded. Choose a compatible model and download it before generating a response.');
   }
 
   let output = '';
@@ -461,8 +582,8 @@ export async function generate(msgs, settings = {}, onToken = () => {}, onDone =
     }
     if (isMemoryAllocationError(err)) {
       lastError = err;
-      await disposePipe();           // actually release the weights, don't just drop the ref
-      return generateMemoryFallback(msgs, settings, onToken, onDone, err);
+      await disposePipe();
+      throw new Error(`Local inference ran out of memory. The model has been unloaded safely. ${memoryRecoveryAdvice()} Original error: ${err?.message || String(err)}`);
     }
     throw err;
   } finally {
@@ -471,56 +592,6 @@ export async function generate(msgs, settings = {}, onToken = () => {}, onDone =
 
   onDone(output);
   return output;
-}
-
-async function generateMemoryFallback(msgs, settings, onToken, onDone, err) {
-  fallbackMode = true;
-  const diag = await browserDiagnostics();
-  const answer = [
-    'The local model ran out of browser memory while trying to respond, so I switched to Browser Helper mode instead of crashing.',
-    '',
-    memoryRecoveryAdvice(),
-    '',
-    'Current browser diagnostics:',
-    '',
-    diag,
-    '',
-    `Original error: ${err?.message || String(err)}`,
-  ].join('\n');
-
-  for (const chunk of answer.match(/.{1,18}(\s|$)/g) || [answer]) {
-    if (stopFlag) break;
-    onToken(chunk);
-    await new Promise(r => setTimeout(r, 8));
-  }
-  onDone(answer);
-  return answer;
-}
-
-async function generateFallback(msgs, settings, onToken, onDone) {
-  fallbackMode = true;
-  const last = [...msgs].reverse().find(m => m.role === 'user')?.content || '';
-  const diag = await browserDiagnostics();
-  const lower = last.toLowerCase();
-  let answer;
-
-  if (lower.includes('download') || lower.includes('model') || lower.includes('stuck') || lower.includes('load')) {
-    answer = `I can help diagnose the model download. The local LLM is not loaded yet, so I am using Browser Helper mode.\n\n${diag}\n\nTry this:\n1. Keep this tab open and online until the first model finishes.\n2. Use SmolLM2 360M first; it is the smallest supported model.\n3. Free browser storage if quota is low, then clear the model cache in Settings and retry.\n4. Use Chrome or Edge for WebGPU acceleration; CPU/WASM fallback is slower but should still work.\n5. If a corporate/ad blocker blocks cdn.jsdelivr.net or huggingface.co, allow those domains for the first download.`;
-  } else if (lower.includes('browser') || lower.includes('storage') || lower.includes('webgpu') || lower.includes('offline')) {
-    answer = `Here is what I can see from the browser right now:\n\n${diag}\n\nI can read these browser-provided capabilities and explain what they mean. For privacy, I cannot control other tabs or browse arbitrary pages unless the app adds an explicit web-search/browser connector.`;
-  } else {
-    answer = `I am in Browser Helper mode because the local AI model is not loaded yet. I can still help with setup, browser diagnostics, and app usage.\n\n${diag}\n\nAsk me about the model download, storage, WebGPU, offline use, or open Settings to retry the model.`;
-  }
-
-  const max = Number(settings.max_new_tokens || 512) * 4;
-  answer = answer.slice(0, Math.max(500, max));
-  for (const chunk of answer.match(/.{1,18}(\s|$)/g) || [answer]) {
-    if (stopFlag) break;
-    onToken(chunk);
-    await new Promise(r => setTimeout(r, 8));
-  }
-  onDone(answer);
-  return answer;
 }
 
 export async function browserDiagnostics() {
@@ -556,7 +627,6 @@ export function stop() {
   try { stopper?.interrupt(); } catch { /* ignore */ }
 }
 export function isLoaded() { return pipe !== null && loadedModel !== null; }
-export function isFallback() { return fallbackMode; }
 export function getModelId() { return loadedModel; }
 export function getRuntime() { return loadedRuntime; }
 export function isLoading() { return loading; }
@@ -567,7 +637,6 @@ export async function resetModel() {
   loading = false;
   loadingModel = null;
   loadingPromise = null;
-  fallbackMode = true;
 }
 export function isLikelyMemoryError(err) { return isMemoryAllocationError(err); }
 
@@ -580,6 +649,7 @@ export async function isCached(modelId) {
   try {
     modelId = normalizeModelId(modelId);
     if (!('caches' in self)) return false;
+    await ensureRuntime();
     const plan = await planFor(modelId);
     const dtypes = [...new Set(plan.map(a => a.dtype))];
     for (const dtype of dtypes) {
@@ -591,28 +661,37 @@ export async function isCached(modelId) {
   }
 }
 
-export async function clearCache() {
-  await disposePipe();
-  for (const [modelId, cfg] of Object.entries(MODELS)) {
-    const dtypes = new Set([
-      cfg.webgpu?.dtype, cfg.webgpu?.noF16Dtype, cfg.wasm?.dtype,
-    ].filter(Boolean));
-    for (const dtype of dtypes) {
-      try { await ModelRegistry.clear_cache(modelId, { dtype }); } catch (err) {
-        console.warn(`[AI] clear_cache failed for ${modelId}/${dtype}:`, err);
-      }
+export async function clearModelCache(modelId) {
+  modelId = normalizeModelId(modelId);
+  if (loadedModel === modelId) await disposePipe();
+  await ensureRuntime();
+  const cfg = MODELS[modelId];
+  const dtypes = new Set([
+    cfg.webgpu?.dtype, cfg.webgpu?.noF16Dtype, cfg.wasm?.dtype,
+  ].filter(Boolean));
+  let deleted = 0;
+  for (const dtype of dtypes) {
+    try {
+      const result = await ModelRegistry.clear_cache(modelId, { dtype });
+      deleted += Number(result?.filesDeleted || 0);
+    } catch (err) {
+      console.warn(`[AI] clear_cache failed for ${modelId}/${dtype}:`, err);
     }
   }
-  // Duplicate model copies left behind by older service workers.
+  loadedRuntime = null;
+
+  return deleted;
+}
+
+export async function clearCache() {
+  for (const modelId of Object.keys(MODELS)) await clearModelCache(modelId);
+  // Retire only obsolete app-owned model caches; never delete Transformers.js cache.
   if ('caches' in self) {
     for (const key of await caches.keys()) {
       if (key.startsWith('lm-models-')) await caches.delete(key);
     }
   }
-  loadedRuntime = null;
-  fallbackMode = false;
 }
-
 export function withSystem(msgs, prompt = DEFAULT_SYSTEM) {
   if (!prompt || msgs.some(m => m.role === 'system')) return msgs;
   return [{ role: 'system', content: prompt }, ...msgs];

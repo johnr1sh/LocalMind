@@ -16,6 +16,9 @@ const app = {
   msgs: [],
   settings: {},
   generating: false,
+  modelOperation: false,
+  modelOperationId: null,
+  modelOperationPromise: null,
   query: '',
   lastHealth: null,
   searchMatches: null,
@@ -30,7 +33,26 @@ async function init() {
     return;
   }
 
-  registerSW();
+  await registerSW();
+  // Wait until the newly installed worker actually controls this document before
+  // importing the CDN-hosted inference runtime or checking model caches.
+  if ('serviceWorker' in navigator) {
+    try {
+      await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise(resolve => setTimeout(resolve, 2500)),
+      ]);
+      if (!navigator.serviceWorker.controller) {
+        await new Promise(resolve => {
+          const done = () => { clearTimeout(timeout); resolve(); };
+          const timeout = setTimeout(done, 3000);
+          navigator.serviceWorker.addEventListener('controllerchange', done, { once: true });
+        });
+      }
+    } catch (err) {
+      console.warn('[SW] control wait failed; online inference can still proceed:', err);
+    }
+  }
 
   app.settings = await DB.getAllSettings();
   // Older builds saved a model id that has no ONNX weights; map it to a working repo.
@@ -497,9 +519,16 @@ async function runGeneration(convId) {
     try {
       await loadModel(modelId);
     } catch (err) {
-      UI.setProgress({ status: 'fallback' });
-      UI.showErr(`Model load failed. Browser Helper mode is active. ${err.message}`, 9000);
-      refreshModelBadge('fallback', modelId);
+      // Never generate or save a simulated "Browser Helper" answer as if it were AI.
+      // Keep the user's message in history and stop this generation cleanly.
+      UI.setProgress({ status: 'ready' });
+      UI.showErr(`Local model could not start. No AI response was generated. ${err.message}`, 12000);
+      refreshModelBadge('error', modelId);
+      document.getElementById('typing-indicator').classList.add('hidden');
+      app.generating = false;
+      setInputEnabled(true);
+      await refreshCacheChips();
+      return;
     }
   }
 
@@ -533,8 +562,6 @@ async function runGeneration(convId) {
 
   try {
     const full = await AI.generate(msgs, opts, push, done);
-    if (AI.isFallback()) refreshModelBadge('fallback', modelIdForGeneration());
-
     if (!full || !full.trim()) {
       el.remove();
       return;
@@ -551,7 +578,8 @@ async function runGeneration(convId) {
     document.getElementById('typing-indicator').classList.add('hidden');
     el.remove();
     if (AI.isLikelyMemoryError(err)) AI.resetModel();
-    UI.showErr(`Generation failed: ${err.message}`);
+    refreshModelBadge('error', modelIdForGeneration());
+    UI.showErr(`Generation failed. No simulated response was saved. ${err.message}`);
     console.error(err);
   } finally {
     clearInterval(scrollInterval);
@@ -613,17 +641,37 @@ function safeGenerationOptions(modelId, opts) {
 }
 
 async function loadModel(id, { showPanel = true, skipConfirm = false } = {}) {
-  const health = await ensureModelSafeToLoad(id, { skipConfirm });
-  refreshModelBadge('loading', id);
-  if (showPanel) UI.setProgress({ status: 'initiate', modelName: health.modelName, downloadMB: health.downloadMB, health });
-  await AI.loadModel(id, progress => {
-    const withHealth = { ...progress, modelName: health.modelName, downloadMB: health.downloadMB, health };
-    if (showPanel) UI.setProgress(withHealth);
-    if (progress.status === 'ready') {
-      refreshModelBadge('ready', id);
-      refreshSystemHealth(id);
+  if (app.modelOperationPromise) {
+    if (app.modelOperationId === id) return app.modelOperationPromise;
+    throw new Error('Another model is being prepared. Wait for it to finish before switching.');
+  }
+
+  app.modelOperation = true;
+  app.modelOperationId = id;
+  const operation = (async () => {
+    const health = await ensureModelSafeToLoad(id, { skipConfirm });
+    refreshModelBadge('loading', id);
+    if (showPanel) UI.setProgress({ status: 'initiate', modelName: health.modelName, downloadMB: health.downloadMB, health });
+    await AI.loadModel(id, progress => {
+      const withHealth = { ...progress, modelName: health.modelName, downloadMB: health.downloadMB, health };
+      if (showPanel) UI.setProgress(withHealth);
+      if (progress.status === 'ready') {
+        refreshModelBadge('ready', id);
+        refreshSystemHealth(id);
+      }
+    });
+  })();
+  app.modelOperationPromise = operation;
+
+  try {
+    return await operation;
+  } finally {
+    if (app.modelOperationPromise === operation) {
+      app.modelOperation = false;
+      app.modelOperationId = null;
+      app.modelOperationPromise = null;
     }
-  });
+  }
 }
 
 
@@ -636,11 +684,7 @@ function refreshModelBadge(status = 'loading', id = null) {
   const info = AI.MODELS[mid];
 
   dot.className = `model-badge-dot ${status}`;
-  if (status === 'fallback') {
-    name.textContent = 'Browser Helper Mode';
-  } else {
-    name.textContent = info ? info.name : mid.split('/')[1];
-  }
+  name.textContent = info ? info.name : mid.split('/')[1];
 }
 
 // ---- input state ----
@@ -755,13 +799,72 @@ async function refreshCacheChips() {
     const cached = await AI.isCached(id);
     const chip = document.createElement('div');
     chip.className = 'model-cache-chip';
-    chip.innerHTML = `
-      <span class="model-cache-chip-name">${info.name} (${info.size})</span>
-      <span class="model-cache-chip-status ${cached ? 'cached' : 'not-cached'}">${cached ? 'Cached' : 'Not downloaded'}</span>`;
+
+    const name = document.createElement('span');
+    name.className = 'model-cache-chip-name';
+    name.textContent = `${info.name} · ${info.size}`;
+
+    const status = document.createElement('span');
+    status.className = `model-cache-chip-status ${cached ? 'cached' : 'not-cached'}`;
+    status.textContent = cached ? 'Downloaded' : 'Not downloaded';
+
+    const actions = document.createElement('div');
+    actions.className = 'model-cache-chip-actions';
+
+    const useButton = document.createElement('button');
+    useButton.type = 'button';
+    useButton.className = 'btn btn-ghost btn-sm';
+    useButton.textContent = cached ? 'Use' : 'Download';
+    useButton.disabled = app.generating || app.modelOperation;
+    useButton.addEventListener('click', async () => {
+      if (app.generating || app.modelOperation) return;
+      useButton.disabled = true;
+      useButton.textContent = cached ? 'Loading…' : 'Downloading…';
+      try {
+        await loadModel(id, { showPanel: true });
+        app.settings.model = id;
+        await DB.setSetting('model', id);
+        const select = document.getElementById('model-select');
+        if (select) select.value = id;
+        refreshModelBadge('ready', id);
+        UI.showOk(`${info.name} is ready for local inference.`);
+      } catch (err) {
+        refreshModelBadge('error', id);
+        UI.showErr(`Could not prepare ${info.name}. ${err.message}`, 12000);
+      } finally {
+        await refreshCacheChips();
+      }
+    });
+    actions.appendChild(useButton);
+
+    if (cached) {
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button';
+      removeButton.className = 'btn btn-ghost btn-sm';
+      removeButton.textContent = 'Remove';
+      removeButton.disabled = app.generating || app.modelOperation;
+      removeButton.addEventListener('click', async () => {
+        if (app.generating || app.modelOperation) return;
+        const ok = await UI.confirmDlg('Remove model', `Delete the downloaded files for ${info.name}? Your conversations will remain.`, 'Remove');
+        if (!ok) return;
+        try {
+          const wasActive = AI.getModelId() === id;
+          await AI.clearModelCache(id);
+          if (wasActive) refreshModelBadge('', id);
+          await refreshSystemHealth(id);
+          await refreshCacheChips();
+          UI.showOk(`${info.name} download removed.`);
+        } catch (err) {
+          UI.showErr(`Could not remove model files. ${err.message}`);
+        }
+      });
+      actions.appendChild(removeButton);
+    }
+
+    chip.append(name, status, actions);
     el.appendChild(chip);
   }
 }
-
 
 async function refreshSystemHealth(modelId = app.settings.model || AI.DEFAULT_MODEL) {
   const health = await AI.systemHealth(AI.normalizeModelId(modelId));
@@ -930,18 +1033,18 @@ function bindAll() {
 
   $('retry-model-btn').addEventListener('click', async () => {
     const button = $('retry-model-btn');
-    if (app.generating || button.disabled) return;
+    if (app.generating || app.modelOperation || button.disabled) return;
     const modelId = AI.normalizeModelId($('model-select')?.value || app.settings.model || AI.DEFAULT_MODEL);
     button.disabled = true;
     button.textContent = 'Retrying…';
     try {
       AI.resetModel();
-      await loadModel(modelId, { showPanel: true, skipConfirm: true });
+      await loadModel(modelId, { showPanel: true, skipConfirm: false });
       UI.showOk(`${AI.MODELS[modelId]?.name || 'Model'} loaded successfully.`);
       await refreshCacheChips();
     } catch (err) {
-      refreshModelBadge('fallback', modelId);
-      UI.showErr(`Model retry failed. Browser Helper mode remains available. ${err.message}`, 10000);
+      refreshModelBadge('error', modelId);
+      UI.showErr(`Model retry failed. No AI response was generated. ${err.message}`, 12000);
     } finally {
       button.disabled = false;
       button.textContent = 'Retry Model Load';
@@ -967,6 +1070,7 @@ function bindAll() {
   });
 
   $('clear-cache-btn').addEventListener('click', async () => {
+    if (app.generating || app.modelOperation) return;
     const ok = await UI.confirmDlg('Clear Cache', 'Remove all downloaded model files?', 'Clear Cache');
     if (!ok) return;
     try {
