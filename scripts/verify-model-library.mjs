@@ -14,7 +14,7 @@ const modelIds = [...ai.matchAll(/^  '([^']+)': \{/gm)].map(match => match[1]);
 const selectIds = [...html.matchAll(/<option value="([^"]+)"/g)].map(match => match[1]);
 const defaultModel = ai.match(/DEFAULT_MODEL = '([^']+)'/)?.[1];
 
-assert.ok(modelIds.length >= 5, 'Expected at least five curated local models.');
+assert.ok(modelIds.length >= 7, 'Expected at least five curated local models.');
 assert.ok(defaultModel && modelIds.includes(defaultModel), 'Default model must exist in the catalog.');
 for (const id of modelIds) {
   assert.ok(selectIds.includes(id), `Model selector is missing catalog entry: ${id}`);
