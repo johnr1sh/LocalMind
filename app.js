@@ -17,6 +17,8 @@ const app = {
   settings: {},
   generating: false,
   modelOperation: false,
+  modelOperationId: null,
+  modelOperationPromise: null,
   query: '',
   lastHealth: null,
   searchMatches: null,
@@ -639,9 +641,14 @@ function safeGenerationOptions(modelId, opts) {
 }
 
 async function loadModel(id, { showPanel = true, skipConfirm = false } = {}) {
-  if (app.modelOperation) throw new Error('Another model operation is already running. Wait for it to finish.');
+  if (app.modelOperationPromise) {
+    if (app.modelOperationId === id) return app.modelOperationPromise;
+    throw new Error('Another model is being prepared. Wait for it to finish before switching.');
+  }
+
   app.modelOperation = true;
-  try {
+  app.modelOperationId = id;
+  const operation = (async () => {
     const health = await ensureModelSafeToLoad(id, { skipConfirm });
     refreshModelBadge('loading', id);
     if (showPanel) UI.setProgress({ status: 'initiate', modelName: health.modelName, downloadMB: health.downloadMB, health });
@@ -653,8 +660,17 @@ async function loadModel(id, { showPanel = true, skipConfirm = false } = {}) {
         refreshSystemHealth(id);
       }
     });
+  })();
+  app.modelOperationPromise = operation;
+
+  try {
+    return await operation;
   } finally {
-    app.modelOperation = false;
+    if (app.modelOperationPromise === operation) {
+      app.modelOperation = false;
+      app.modelOperationId = null;
+      app.modelOperationPromise = null;
+    }
   }
 }
 
