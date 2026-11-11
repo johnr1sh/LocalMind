@@ -573,7 +573,7 @@ export async function isCached(modelId) {
 
 export async function clearModelCache(modelId) {
   modelId = normalizeModelId(modelId);
-  await disposePipe();
+  if (loadedModel === modelId) await disposePipe();
   const cfg = MODELS[modelId];
   const dtypes = new Set([
     cfg.webgpu?.dtype, cfg.webgpu?.noF16Dtype, cfg.wasm?.dtype,
