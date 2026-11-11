@@ -250,9 +250,10 @@ function setupEnv() {
   const wasm = env.backends?.onnx?.wasm;
   if (wasm) {
     wasm.proxy = false;
-    wasm.numThreads = self.crossOriginIsolated
-      ? Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1))
-      : 1;
+    // A single WASM worker minimizes peak memory during ONNX session creation.
+    // More threads can multiply temporary allocations and trigger std::bad_alloc
+    // on otherwise capable machines. Prefer predictable startup over throughput.
+    wasm.numThreads = 1;
   }
 }
 
@@ -283,11 +284,15 @@ function isMemoryAllocationError(err) {
     || message.includes('allocation failed')
     || message.includes('failed to allocate')
     || message.includes('aborted(oom')
+    || message.includes('std::bad_alloc')
+    || message.includes("can't create a session")
+    || message.includes('cannot create a session')
+    || message.includes('error_code: 6')
     || message.includes('device lost');
 }
 
 function memoryRecoveryAdvice() {
-  return 'This usually means the browser could not reserve enough RAM/GPU memory. Close other tabs/apps, use SmolLM2 360M, lower Max Tokens to 256 or less, and retry. If it keeps happening, clear the model cache and avoid larger models on this device.';
+  return 'The ONNX runtime could not reserve memory while creating its inference session (std::bad_alloc). This is different from browser storage quota: cached model files can fit on disk while the runtime still cannot allocate enough working memory. Close other heavy tabs/apps, restart the browser, keep SmolLM2 360M selected, and retry. If WebGPU is available, enable hardware acceleration and relaunch Chrome/Edge; otherwise WASM is the CPU fallback. Clearing the model cache is a last resort because it forces a fresh download.';
 }
 
 function friendlyLoadError(err, attempts) {
@@ -521,7 +526,11 @@ async function generateFallback(msgs, settings, onToken, onDone) {
 export async function browserDiagnostics() {
   const parts = [];
   parts.push(`- Online: ${navigator.onLine ? 'yes' : 'no'}`);
-  parts.push(`- WebGPU: ${'gpu' in navigator ? 'available' : 'not available'}`);
+  const gpu = await probeWebGPU(true);
+  parts.push(`- WebGPU API: ${'gpu' in navigator ? 'present' : 'not available'}`);
+  parts.push(`- WebGPU adapter: ${gpu.usable ? 'available' : 'not available (browser may expose the API without a usable adapter)'}`);
+  if (gpu.usable) parts.push(`- WebGPU shader-f16: ${gpu.f16 ? 'supported' : 'not supported'}`);
+  parts.push(`- Planned runtime: ${(await planFor(DEFAULT_MODEL)).map(item => `${item.device}/${item.dtype}`).join(', ') || 'none'}`);
   parts.push(`- WebAssembly: ${typeof WebAssembly !== 'undefined' ? 'available' : 'not available'}`);
   parts.push(`- Device memory: ${Number.isFinite(navigator.deviceMemory) ? `${navigator.deviceMemory} GB` : 'not reported'}`);
   parts.push(`- CPU cores: ${Number.isFinite(navigator.hardwareConcurrency) ? navigator.hardwareConcurrency : 'not reported'}`);
